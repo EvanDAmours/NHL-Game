@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { TEAMS } from "../engine/teams.js";
 import { TeamBadge } from "./common.jsx";
-import { createLeague, loadLeague, deleteSave, rosterFile, deserializeLeague } from "../engine/league.js";
+import { createLeague, loadLeague, deleteSave, rosterFile, deserializeLeague, restoreLeague } from "../engine/league.js";
 import { DIFFICULTY } from "../engine/constants.js";
 import { cloudMeta, cloudLoad } from "../platform.js";
 
@@ -47,7 +47,7 @@ export default function TitleScreen({ onStart, ask }) {
   };
   const contCloud = async () => {
     setLoadingCloud(true);
-    const lg = await cloudLoad().catch(() => null);
+    const lg = restoreLeague(await cloudLoad().catch(() => null));
     setLoadingCloud(false);
     if (!lg) return setErr("Couldn't load the cloud backup. Try again in a moment.");
     onStart(lg);

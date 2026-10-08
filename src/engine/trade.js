@@ -3,7 +3,7 @@
 import { tradeValue, prospectValue } from "./players.js";
 import { DIFFICULTY, MAX_ROSTER, isGoalie, isDefense, capForYear } from "./constants.js";
 import { capSpace, counts, logTx, queueForLines } from "./roster.js";
-import { leagueTable } from "./standings.js";
+import { leagueTable, conferenceTable } from "./standings.js";
 import { teamRatings } from "./lines.js";
 import { pickLabel } from "./draft.js";
 
@@ -16,15 +16,31 @@ export function tradingClosed(league) {
   return league.day > league.deadlineDay;
 }
 
-// Top 14 by roster strength and record. Cached per league and day (not saved), since
-// the trade market asks about every team many times over.
+// Buyers and sellers. Once the season is a quarter old a team contends if it's in a
+// playoff spot or within 4 points of one (by conference); before that, and in the
+// off-season, the top 8 rosters in each conference do. Cached per league and refreshed
+// whenever the day, the free-agency day, games played or the transaction log change.
 const contendCache = new WeakMap();
 export function isContending(league, team) {
-  const key = `${league.year}|${league.phase}|${league.day}|${league.deadline?.minute ?? ""}`;
+  const gp = league.teams.reduce((s, t) => s + t.rec.gp, 0);
+  const key = `${league.year}|${league.phase}|${league.day}|${league.fa?.day ?? ""}|${gp}`;
+  const tx = league.transactions?.[0];
   let c = contendCache.get(league);
-  if (!c || c.key !== key) {
-    const ranked = [...league.teams].map((t) => ({ id: t.id, r: teamRatings(league, t).ovr + (t.rec.gp ? (t.rec.pts / (2 * t.rec.gp) - 0.5) * 20 : 0) })).sort((a, b) => b.r - a.r);
-    c = { key, set: new Set(ranked.slice(0, 14).map((x) => x.id)) };
+  if (!c || c.key !== key || c.tx !== tx) {
+    const set = new Set();
+    const avgGp = gp / league.teams.length;
+    for (const conf of ["East", "West"]) {
+      const teams = league.teams.filter((t) => t.conf === conf);
+      if (league.phase === "regular" && avgGp >= 20) {
+        const table = conferenceTable(league, conf);
+        const cut = table[7]?.rec.pts ?? 0;
+        table.forEach((t, i) => (i < 8 || t.rec.pts >= cut - 4) && set.add(t.id));
+      } else {
+        const r = (t) => teamRatings(league, t).ovr + (t.rec.gp ? (t.rec.pts / (2 * t.rec.gp) - 0.5) * 20 : 0);
+        teams.sort((a, b) => r(b) - r(a) || a.id - b.id).slice(0, 8).forEach((t) => set.add(t.id));
+      }
+    }
+    c = { key, tx, set };
     contendCache.set(league, c);
   }
   return c.set.has(team.id);
@@ -94,7 +110,12 @@ export function evaluateTrade(league, offer) {
   const posLeft = (team, out, inn, test) =>
     team.roster.filter((id) => !out.includes(id) && test(league.players[id])).length +
     inn.filter((id) => test(league.players[id]) && (user.roster.includes(id) || ai.roster.includes(id))).length;
-  if (posLeft(ai, offer.get, offer.give, (p) => isGoalie(p.pos)) < 2) problems.push(`${ai.abbr} need two goalies.`);
+  // A healthy goalie in the minors can be called up, so he counts toward the two.
+  const minorG = ai.prospects.some((id) => {
+    const q = league.players[id];
+    return q && isGoalie(q.pos) && q.injury <= 0 && q.ovr >= 60 && !offer.get.includes(id);
+  });
+  if (posLeft(ai, offer.get, offer.give, (p) => isGoalie(p.pos)) + (minorG ? 1 : 0) < 2) problems.push(`${ai.abbr} need two goalies.`);
   if (posLeft(ai, offer.get, offer.give, (p) => isDefense(p.pos)) < 6) problems.push(`${ai.abbr} would be too thin on defense.`);
 
   const ratio = valOut > 0 ? valIn / (valOut * margin) : valIn > 0 ? 9 : 0;

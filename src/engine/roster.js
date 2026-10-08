@@ -140,7 +140,10 @@ export function ensureMinimums(league, team, { notify = false } = {}) {
   let grp;
   while ((grp = need()) && guard++ < 10) {
     const fits = (p) => (grp === "G" ? isGoalie(p.pos) : grp === "D" ? isDefense(p.pos) : isForward(p.pos));
-    const prospect = team.prospects.map((id) => league.players[id]).filter((p) => p && fits(p) && p.injury <= 0 && p.ovr >= 60).sort((a, b) => b.ovr - a.ovr)[0];
+    // Best prospect who fits under the cap (an unsigned pick comes up on an entry-level deal).
+    const room = Math.max(capSpace(league, team), ELC_SALARY);
+    const ready = team.prospects.map((id) => league.players[id]).filter((p) => p && fits(p) && p.injury <= 0 && p.ovr >= 60).sort((a, b) => b.ovr - a.ovr);
+    const prospect = ready.find((p) => (p.signed === false ? ELC_SALARY : p.cap) <= room) || ready[0];
     if (prospect) {
       callUp(league, team, prospect.id);
       if (notify) league.inbox.push({ year: league.year, day: league.day, text: `Emergency call-up: ${prospect.name} (${prospect.pos}, ${prospect.ovr}) joins the roster.` });

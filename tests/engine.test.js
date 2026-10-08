@@ -7,10 +7,11 @@ import { generateAttributes, computeOvr } from "../src/engine/ratings.js";
 import { simPlayoffDay } from "../src/engine/playoffs.js";
 import { simDraftToUser, draftDone } from "../src/engine/draft.js";
 import { simFADay, expiringPlayers } from "../src/engine/offseason.js";
-import { counts, capSpace } from "../src/engine/roster.js";
+import { counts, capSpace, canSendDown, releasePlayer } from "../src/engine/roster.js";
 import { gameLines, syncLines, lineupIds } from "../src/engine/lines.js";
-import { evaluateTrade, executeTrade, tradingClosed } from "../src/engine/trade.js";
-import { toggleUserBlock, deadlinePending, startDeadline, deadlineTick, userOffers, acceptOffer, DEADLINE_START, DEADLINE_END } from "../src/engine/market.js";
+import { evaluateTrade, executeTrade, tradingClosed, isContending } from "../src/engine/trade.js";
+import { toggleUserBlock, onBlock, deadlinePending, startDeadline, deadlineTick, userOffers, acceptOffer, DEADLINE_START, DEADLINE_END } from "../src/engine/market.js";
+import { conferenceTable } from "../src/engine/standings.js";
 import { parseRatingsCsv, matchRows, applyRatings } from "../src/engine/importer.js";
 import { MAX_ROSTER } from "../src/engine/constants.js";
 import rosterFile from "../src/data/nhl27-rosters.json" with { type: "json" };
@@ -239,4 +240,54 @@ test("trade block circulates, AI teams deal, and Deadline Day closes trading at 
   // The rest of the season sims normally after the deadline.
   L.simRestOfSeason(lg);
   assert.ok(L.seasonOver(lg));
+});
+
+test("trade market review fixes: goalies move, no buried vets, standings-based buyers, clean block", () => {
+  const lg = L.createLeague({ userAbbr: "TOR", seed: 5 });
+  const startMinors = new Set(lg.teams.flatMap((t) => t.prospects));
+  const user = lg.teams[lg.userTid];
+  const listed = user.roster.map((id) => lg.players[id]).filter((p) => p.age >= 26).sort((a, b) => b.ovr - a.ovr)[4];
+  toggleUserBlock(lg, listed.id);
+  L.startRegularSeason(lg);
+  while (!deadlinePending(lg)) L.simDay(lg);
+  // Veterans who can't legally be sent down are never hidden in an AI team's minors.
+  for (const t of lg.teams) {
+    if (t.id === lg.userTid) continue;
+    for (const id of t.prospects) {
+      const p = lg.players[id];
+      if (!startMinors.has(id) && p.signed !== false) assert.ok(canSendDown(p), `${t.abbr} buried ${p.name}`);
+    }
+  }
+  // Buyers and sellers follow the standings: every team in a playoff spot is buying.
+  for (const conf of ["East", "West"]) conferenceTable(lg, conf).slice(0, 8).forEach((t) => assert.ok(isContending(lg, t), `${t.abbr} should be a buyer`));
+  startDeadline(lg);
+  while (!lg.deadline.done) deadlineTick(lg);
+  assert.equal(lg.deadline.total, lg.deadline.feed.filter((f) => f.kind === "trade").length);
+  assert.ok(lg.deadline.feed.some((f) => f.talks), "talks are reported before deals");
+  // Goalies can change hands between AI teams (Hellebuyck asked out).
+  const helle = Object.values(lg.players).find((p) => p.name === "Connor Hellebuyck");
+  assert.notEqual(lg.teams[helle.tid].abbr, "WPG", "Hellebuyck traded");
+  // A listed player who leaves without a trade can still be taken off the block.
+  if (lg.players[listed.id].tid === user.id) {
+    toggleUserBlock(lg, listed.id);
+    toggleUserBlock(lg, listed.id);
+    releasePlayer(lg, user, listed.id);
+    assert.ok(onBlock(lg, listed.id));
+    toggleUserBlock(lg, listed.id);
+    assert.ok(!onBlock(lg, listed.id), "Remove works after release");
+  }
+  // Plain-JSON league files are migrated like any other save.
+  const copy = JSON.parse(JSON.stringify(lg));
+  delete copy.block;
+  copy.draftPicks.push({ id: "old-7", year: copy.year + 2, round: 7, orig: 0, owner: 0 });
+  const back = L.deserializeLeague(JSON.stringify(copy));
+  assert.ok(Array.isArray(back.block));
+  assert.ok(!back.draftPicks.some((pk) => pk.round > 4));
+  // After the Final, trading reopens and the block fills up again.
+  L.simRestOfSeason(lg);
+  L.endRegularSeason(lg);
+  while (lg.playoffs.champion == null) simPlayoffDay(lg);
+  L.finishPlayoffs(lg);
+  assert.ok(!tradingClosed(lg));
+  assert.ok(lg.block.filter((b) => b.tid !== lg.userTid).length > 0, "off-season block");
 });

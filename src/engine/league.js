@@ -14,7 +14,8 @@ import { startPlayoffs, simPlayoffDay } from "./playoffs.js";
 import { computeAwards, connSmythe } from "./awards.js";
 import { ensureMinimums, counts, sendDown, canSendDown, logTx, IR_GAMES } from "./roster.js";
 import { startResign, endResign, startNewSeason, aiManageRoster, ratingLevel } from "./offseason.js";
-import { marketWeek, deadlinePending, skipDeadline, refreshBlock, fitRoster, DEADLINE_END } from "./market.js";
+import { marketWeek, deadlinePending, skipDeadline, refreshBlock, fitRoster, seedUserRequests, DEADLINE_END } from "./market.js";
+import { tradingClosed } from "./trade.js";
 
 export function createLeague({ userAbbr = "TOR", mode = "real", difficulty = "normal", seed } = {}) {
   if (seed != null) seedRng(seed);
@@ -74,6 +75,7 @@ export function createLeague({ userAbbr = "TOR", mode = "real", difficulty = "no
   league.schedule = generateSchedule(league.teams);
   league.deadlineDay = Math.floor(lastDay(league.schedule) * 0.78);
   refreshBlock(league);
+  seedUserRequests(league);
   league.inbox.push({ year, day: 0, text: `Welcome, GM of the ${user.city} ${user.name}! Rosters and ratings are from EA SPORTS NHL 27, and every team starts with its real opening-week line combinations. Check the Lines tab, then start the season.` });
   return league;
 }
@@ -292,6 +294,9 @@ export function finishPlayoffs(league) {
   logTx(league, `The ${league.teams[champ].city} ${league.teams[champ].name} win the Stanley Cup!`);
   startDraft(league);
   league.phase = "draft";
+  // Trading reopens after the Final: the block fills up again for the off-season.
+  league.offers = [];
+  refreshBlock(league);
 }
 
 export function completeDraft(league) {
@@ -303,6 +308,7 @@ export function completeDraft(league) {
 
 export function goToFreeAgency(league) {
   endResign(league);
+  refreshBlock(league);
 }
 
 export function beginNextSeason(league) {
@@ -331,11 +337,15 @@ export function deserializeLeague(raw) {
   if (raw.startsWith("{")) {
     const obj = JSON.parse(raw);
     if (obj && typeof obj.league === "string") json = LZString.decompressFromBase64(obj.league);
-    else return obj && obj.version === SAVE_VERSION ? obj : null;
+    else return restoreLeague(obj);
   } else {
     json = LZString.decompressFromUTF16(raw);
   }
-  const l = json ? JSON.parse(json) : null;
+  return restoreLeague(json ? JSON.parse(json) : null);
+}
+
+// Accept a league object from any source (save slot, league file, cloud backup).
+export function restoreLeague(l) {
   return l && l.version === SAVE_VERSION ? migrateLeague(l) : null;
 }
 
@@ -344,11 +354,14 @@ function migrateLeague(l) {
   // The draft went from 7 rounds to 4: drop later-round picks not already in a running draft.
   l.draftPicks = (l.draftPicks || []).filter((pk) => pk.round <= DRAFT_ROUNDS || l.draft?.year === pk.year);
   // Trade block and deadline day: a save already past this season's deadline doesn't replay it.
-  l.block = l.block || [];
   l.offers = l.offers || [];
   l.wire = l.wire || [];
-  if (l.phase === "regular" && l.day > l.deadlineDay && !l.deadline) l.deadline = { year: l.year, minute: DEADLINE_END, done: true, feed: [], trades: 0 };
-  if (l.phase === "playoffs" && !l.deadline) l.deadline = { year: l.year, minute: DEADLINE_END, done: true, feed: [], trades: 0 };
+  const passed = (l.phase === "regular" && l.day > l.deadlineDay) || l.phase === "playoffs";
+  if (passed && !l.deadline) l.deadline = { year: l.year, day: l.deadlineDay, minute: DEADLINE_END, done: true, feed: [], trades: 0, synthetic: true };
+  if (!Array.isArray(l.block)) {
+    l.block = [];
+    if (!tradingClosed(l)) refreshBlock(l);
+  }
   return l;
 }
 

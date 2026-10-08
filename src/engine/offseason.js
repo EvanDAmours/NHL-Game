@@ -7,6 +7,7 @@ import { payroll, capSpace, counts, signPlayer, releasePlayer, callUp, sendDown,
 import { teamRatings, autoLines, syncLines } from "./lines.js";
 import { generateSchedule } from "./schedule.js";
 import { generateDraftClass, createDraftPicks, releaseProspect } from "./draft.js";
+import { marketOffseasonDay } from "./market.js";
 import { blankRecord } from "./sim.js";
 
 const diff = (league) => DIFFICULTY[league.settings.difficulty] || DIFFICULTY.normal;
@@ -159,6 +160,7 @@ const TARGET = { F: 13, D: 7, G: 2 };
 
 export function simFADay(league) {
   league.fa.day++;
+  marketOffseasonDay(league);
   const order = shuffle(league.teams.filter((t) => t.id !== league.userTid));
   const pool = () => league.freeAgents.map((id) => league.players[id]).filter(Boolean).sort((a, b) => b.ovr - a.ovr);
   for (const t of order) {

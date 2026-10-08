@@ -12,7 +12,7 @@ import TradePage from "./ui/TradePage.jsx";
 import FreeAgencyPage from "./ui/FreeAgencyPage.jsx";
 import DraftPage from "./ui/DraftPage.jsx";
 import TradeBlockPage from "./ui/TradeBlockPage.jsx";
-import DeadlinePage from "./ui/DeadlinePage.jsx";
+import DeadlinePage, { DeadlineTicker } from "./ui/DeadlinePage.jsx";
 import { deadlinePending, deadlineActive, startDeadline, userOffers } from "./engine/market.js";
 import LeaguePage from "./ui/LeaguePage.jsx";
 import SettingsPage from "./ui/SettingsPage.jsx";
@@ -41,7 +41,12 @@ const NAV = [
   { sep: true },
   { id: "trade", label: "Trade", ico: "🔁" },
   { id: "block", label: "Trade Block", ico: "📋" },
-  { id: "deadline", label: "Deadline Day", ico: "⏰", when: (lg) => lg.phase === "regular" && (deadlinePending(lg) || lg.deadline?.year === lg.year) },
+  {
+    id: "deadline",
+    label: "Deadline Day",
+    ico: "⏰",
+    when: (lg) => (lg.phase === "regular" || lg.phase === "playoffs") && (deadlinePending(lg) || (lg.deadline?.year === lg.year && !lg.deadline.synthetic)),
+  },
   { id: "freeagency", label: "Free Agency", ico: "✍️" },
   { id: "draft", label: "Draft & Scouting", ico: "🎯" },
   { sep: true },
@@ -104,9 +109,11 @@ export default function App({ resume = false }) {
   }, [showToast, syncCloud]);
 
   // Throttled autosave: at most one write per 400ms, never more than 400ms behind.
-  const commit = useCallback(() => {
+  // Callers that change the league many times a second (the deadline clock) pass a longer
+  // delay and call save() when they stop; leaving the page still flushes a pending save.
+  const commit = useCallback((ms = 400) => {
     setRev((r) => r + 1);
-    if (!saveTimer.current) saveTimer.current = setTimeout(flushSave, 400);
+    if (!saveTimer.current) saveTimer.current = setTimeout(flushSave, ms);
   }, [flushSave]);
 
   useEffect(() => {
@@ -183,6 +190,14 @@ export default function App({ resume = false }) {
         setModal(null);
         setTab("trade");
       },
+      // Open an AI offer in the Trade Center so the user can change it.
+      counterOffer: (o) => {
+        setTradeSeed({ tid: o.tid, give: o.give, get: o.get, givePicks: o.givePicks, getPicks: o.getPicks, n: Date.now() });
+        setModal(null);
+        setTab("trade");
+      },
+      clearTradeSeed: () => setTradeSeed(null),
+      save: () => saveTimer.current && flushSave(),
       ask,
       replaceLeague: (lg) => startLeague(lg),
       newGame: () => {
@@ -192,7 +207,7 @@ export default function App({ resume = false }) {
       },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [leagueRef.current, commit, showToast, ask]
+    [leagueRef.current, commit, showToast, ask, flushSave]
   );
 
   const confirmEl = confirmReq && (
@@ -457,13 +472,14 @@ export default function App({ resume = false }) {
           <div className="spacer" />
           {!live && <div className="actions">{actions}</div>}
         </div>
+        {deadlineActive(league) && !live && <DeadlineTicker league={league} onOpen={() => setTab("deadline")} />}
         <div className="body">
           <div className="nav">
             {NAV.filter((n) => !n.when || n.when(league)).map((n, i) =>
               n.sep ? (
                 <div key={"sep" + i} className="sep" />
               ) : (
-                <button key={n.id} className={tab === n.id && !live ? "active" : ""} disabled={!!live} onClick={() => setTab(n.id)}>
+                <button key={n.id} className={tab === n.id && !live ? "active" : ""} disabled={!!live} onClick={() => (n.id === "deadline" && deadlinePending(league) ? blockers() : setTab(n.id))}>
                   <span className="ico">{n.ico}</span>
                   {n.label}
                   {badgeFor(n.id) && <span className="badge">{badgeFor(n.id)}</span>}

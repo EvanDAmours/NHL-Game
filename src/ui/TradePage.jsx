@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useGame, TeamBadge, Ovr, PlayerName, money, POS_ORDER } from "./common.jsx";
 import { evaluateTrade, executeTrade, suggestBalance, tradingClosed } from "../engine/trade.js";
-import { noteUserTrade, onBlock, deadlineActive, fmtClock } from "../engine/market.js";
+import { noteUserTrade, tradeLabels, onBlock, deadlineActive, fmtClock } from "../engine/market.js";
 import { pickLabel } from "../engine/draft.js";
 import { capSpace } from "../engine/roster.js";
 import { shownRatings } from "../engine/draft.js";
@@ -57,7 +57,7 @@ function Assets({ team, sel, setSel, selPicks, setSelPicks, mine }) {
 }
 
 export default function TradePage({ seed }) {
-  const { league, commit, toast, go } = useGame();
+  const { league, commit, toast, go, clearTradeSeed } = useGame();
   const user = league.teams[league.userTid];
   const others = league.teams.filter((t) => t.id !== user.id);
   const [partner, setPartner] = useState(others[0].id);
@@ -68,6 +68,17 @@ export default function TradePage({ seed }) {
 
   useEffect(() => {
     if (!seed) return;
+    // A seed is used once: opening the Trade tab later starts from a clean slate.
+    clearTradeSeed();
+    if (seed.tid != null && seed.give) {
+      // Counter-offer: load the AI's offer so it can be changed.
+      setPartner(seed.tid);
+      setGive(seed.give.filter((id) => league.players[id]?.tid === user.id));
+      setGet(seed.get.filter((id) => league.players[id]?.tid === seed.tid));
+      setGivePicks(seed.givePicks || []);
+      setGetPicks(seed.getPicks || []);
+      return;
+    }
     const p = league.players[seed.pid];
     if (p && p.tid !== user.id && p.tid >= 0) {
       setPartner(p.tid);
@@ -75,7 +86,7 @@ export default function TradePage({ seed }) {
       setGive([]);
       setGivePicks([]);
       setGetPicks([]);
-    } else if (p && p.tid === user.id) {
+    } else if (p && p.tid === user.id && seed.tid === user.id) {
       setGive([p.id]);
     }
   }, [seed]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -90,7 +101,9 @@ export default function TradePage({ seed }) {
       toast(ev.problems[0] || `${ai.abbr}: "${ev.mood}"`);
       return;
     }
-    noteUserTrade(league, offer, executeTrade(league, offer));
+    const lbl = tradeLabels(league, offer);
+    executeTrade(league, offer);
+    noteUserTrade(league, offer, lbl);
     toast(`Trade completed with ${ai.city}!`);
     reset();
     commit();

@@ -120,7 +120,7 @@ export default function PlayerModal({ pid }) {
             <>
               <button disabled={!canSendDown(p)} onClick={() => { sendDown(league, team, p.id); commit(); closeModal(); }}>Send to minors</button>
               <button className="danger" onClick={async () => { if (await ask({ title: `Release ${p.name}?`, body: p.yrs > 0 && p.cap > 0 ? `His buyout leaves ${money(p.cap / 3)} of dead cap for ${p.yrs * 2} season(s).` : "He becomes a free agent.", yes: "Release", danger: true })) { releasePlayer(league, team, p.id); commit(); closeModal(); } }}>Release</button>
-              <button onClick={() => proposeTradeFor(p.id)}>Put in a trade</button>
+              <button onClick={() => proposeTradeFor(p.id, p.tid)}>Put in a trade</button>
             </>
           )}
           {mine && inMinors && (
