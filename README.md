@@ -24,11 +24,13 @@ npm run build:artifact   # one self-contained page: dist/rink-gm.html
 - **Real line combinations**: every team starts with its actual opening-week 2026-27 lines (forward lines, defence pairs, starter and backup goalie) and its injury list. The Lines tab lays them out like Daily Faceoff's line charts, with LW-C-RW lines, LD-RD pairs, power-play and penalty-kill units, goalies, injuries and scratches. You can browse any team's lines, tap two players to swap them, or reset to the NHL lines. Lines stay set between games: injured players keep their spot while the best healthy scratch fills in, and players coming back from injury or arriving in a trade are worked back into the lineup.
 - **EA-style ratings**: every player has 25 EA NHL attributes (skating, shooting, hands, checking, defense, senses; 15 goalie attributes). The overall (OVR) is computed from player-type weights the way EA does it, and attributes are generated so each player's OVR matches their NHL 27 number exactly.
 - **Simulation**: a 10-second-step engine with line deployment, power plays and penalty kills, faceoffs, hits, blocks, rebounds, fights, 3-on-3 OT, shootouts, playoff sudden-death OT, goalie pulls and injuries. It's calibrated to roughly NHL averages: about 2.9 goals and 30 shots per team per game, a .903 league save percentage, and 25% of games past regulation.
-- **Live games**: watch your games on an animated rink with play-by-play. You control tactics (attack/balanced/defend), ride your top lines, call a timeout and pull your goalie. Live and simulated games share one engine, so live stats count toward the season.
+- **Live games**: watch your games on an animated rink with play-by-play. Players and the puck glide between plays, possession has momentum (teams carry the puck up ice and cycle in the zone), the clock ticks down second by second, and the game pauses briefly on goals and between periods. Normal speed runs a regulation game in about seven minutes. You control tactics (attack/balanced/defend), ride your top lines, call a timeout and pull your goalie. Live and simulated games share one engine, so live stats count toward the season.
 - **Season**: an NHL-format 82-game schedule (41 home games), division and wild-card standings with NHL tiebreakers, a trade deadline, and awards (Hart, Art Ross, Rocket Richard, Norris, Vezina, Calder, Selke, Conn Smythe).
 - **Playoffs**: 16 teams, a fixed divisional bracket, best-of-7 series with 2-2-1-1-1 home ice.
+- **Trade block**: teams shop players who don't fit their plans (veterans on rebuilding clubs, pending UFAs, cap casualties, surplus goalies, healthy scratches, and players who've asked out, like Connor Hellebuyck). The list turns over every week, AI teams make deals with each other, and every listing shows which teams are linked. Put your own players on the block and interested teams send offers you can accept or decline.
+- **Trade Deadline Day**: the season stops on deadline day for a TV-style deadline show. A clock runs from 8:00 AM to the 3:00 PM ET deadline, a breaking-news feed fills with trades and rumours (faster in the last hour), teams call with offers for your players, and you can make your own deals until time runs out.
 - **Front office**: the salary cap ($104M in 2026-27, $113.5M in 2027-28, then growth), a 23-man roster with minors call-ups and send-downs, buyouts with dead cap, re-signing with RFA/UFA and player mood, a 30-day free agency with AI bidding, and trades with an AI that values players, prospects and picks differently when contending or rebuilding.
-- **Draft**: an NHL two-draw lottery, 7 rounds, 224 picks, generated prospect classes, and a scouting budget that narrows the uncertainty on prospect ratings.
+- **Draft**: an NHL two-draw lottery, 4 rounds, 128 picks, generated prospect classes, and a scouting budget that narrows the uncertainty on prospect ratings. The draft screen shows who's on the clock, the next picks, a best-available board with "Now" and "Ceiling" ranges and a plain-language ceiling (Franchise, Top line, Top six...), and the full order round by round.
 - **Long-term play**: aging, development and retirement, career stats, league history and transaction logs. Saves are compressed in localStorage, and you can export or import league files.
 
 ## About the ratings data
@@ -52,8 +54,9 @@ npm run build:artifact   # one self-contained page: dist/rink-gm.html
 ## Project layout
 
 ```
-src/engine/   game logic (pure JS, no React) — ratings, players, sim, schedule,
-              standings, playoffs, draft, roster/cap, offseason, trade, awards,
+src/engine/   game logic (pure JS, no React) — ratings, players, sim, schedule, lines,
+              standings, playoffs, draft, roster/cap, offseason, trade, trade market
+              (block, AI deals, deadline day), awards,
               importer, league orchestration + save/load
 src/ui/       React screens (dashboard, roster, lines, live game, trade, FA, draft…)
 src/data/     NHL 27 roster file

@@ -11,6 +11,9 @@ import PlayoffsPage from "./ui/PlayoffsPage.jsx";
 import TradePage from "./ui/TradePage.jsx";
 import FreeAgencyPage from "./ui/FreeAgencyPage.jsx";
 import DraftPage from "./ui/DraftPage.jsx";
+import TradeBlockPage from "./ui/TradeBlockPage.jsx";
+import DeadlinePage from "./ui/DeadlinePage.jsx";
+import { deadlinePending, deadlineActive, startDeadline, userOffers } from "./engine/market.js";
 import LeaguePage from "./ui/LeaguePage.jsx";
 import SettingsPage from "./ui/SettingsPage.jsx";
 import LiveGame from "./ui/LiveGame.jsx";
@@ -37,6 +40,8 @@ const NAV = [
   { id: "playoffs", label: "Playoffs", ico: "🏆" },
   { sep: true },
   { id: "trade", label: "Trade", ico: "🔁" },
+  { id: "block", label: "Trade Block", ico: "📋" },
+  { id: "deadline", label: "Deadline Day", ico: "⏰", when: (lg) => lg.phase === "regular" && (deadlinePending(lg) || lg.deadline?.year === lg.year) },
   { id: "freeagency", label: "Free Agency", ico: "✍️" },
   { id: "draft", label: "Draft & Scouting", ico: "🎯" },
   { sep: true },
@@ -150,6 +155,15 @@ export default function App({ resume = false }) {
     setTimeout(tick, 20);
   }, [commit]);
 
+  // A new screen starts at the top (matters most on phones).
+  useEffect(() => {
+    try {
+      window.scrollTo(0, 0);
+    } catch {
+      /* no window */
+    }
+  }, [tab, live]);
+
   useEffect(() => {
     document.documentElement.style.setProperty("--team", league ? league.teams[league.userTid].colors[0] : "#4ea1ff");
   });
@@ -203,7 +217,18 @@ export default function App({ resume = false }) {
   const user = league.teams[league.userTid];
 
   // ---------- Phase actions ----------
+  const openDeadline = () => {
+    startDeadline(league);
+    setTab("deadline");
+    commit();
+  };
   const blockers = () => {
+    if (deadlinePending(league)) {
+      const first = !deadlineActive(league);
+      openDeadline();
+      if (first) showToast("It's Trade Deadline Day! Make your moves before 3:00 PM ET.", 5000);
+      return true;
+    }
     const issues = rosterIssues(league, user).filter((x) => !x.startsWith("Need"));
     if (issues.length) {
       showToast(issues[0], 5000);
@@ -230,11 +255,12 @@ export default function App({ resume = false }) {
       runChunked(
         () => `${label} — ${dayToDate(league.year, league.day)}`,
         () => {
-          if (league.phase !== "regular" || L.seasonOver(league) || i >= n) return false;
+          if (league.phase !== "regular" || L.seasonOver(league) || i >= n || deadlinePending(league)) return false;
           L.simDay(league);
           i++;
           return true;
-        }
+        },
+        () => deadlinePending(league) && blockers()
       );
     },
     simToDeadline: () => {
@@ -242,10 +268,11 @@ export default function App({ resume = false }) {
       runChunked(
         () => `Simulating to the trade deadline — ${dayToDate(league.year, league.day)}`,
         () => {
-          if (league.phase !== "regular" || L.seasonOver(league) || league.day > league.deadlineDay) return false;
+          if (league.phase !== "regular" || L.seasonOver(league) || deadlinePending(league) || league.day > league.deadlineDay) return false;
           L.simDay(league);
           return true;
-        }
+        },
+        () => deadlinePending(league) && blockers()
       );
     },
     simToEnd: () => {
@@ -253,10 +280,11 @@ export default function App({ resume = false }) {
       runChunked(
         () => `Simulating the regular season — ${dayToDate(league.year, league.day)}`,
         () => {
-          if (league.phase !== "regular" || L.seasonOver(league)) return false;
+          if (league.phase !== "regular" || L.seasonOver(league) || deadlinePending(league)) return false;
           L.simDay(league);
           return true;
-        }
+        },
+        () => deadlinePending(league) && blockers()
       );
     },
     playLive: () => {
@@ -359,7 +387,9 @@ export default function App({ resume = false }) {
   if (league.phase === "preseason") actions.push(<button key="s" className="primary" onClick={act.startSeason}>Start Season ▶</button>);
   if (league.phase === "regular") {
     if (L.seasonOver(league)) actions.push(<button key="po" className="primary" onClick={act.startPlayoffs}>Start Playoffs 🏆</button>);
-    else {
+    else if (deadlinePending(league)) {
+      actions.push(<button key="dd" className="primary" onClick={openDeadline}>⏰ Trade Deadline Day</button>);
+    } else {
       const ug = L.userGameOnDay(league);
       if (ug) {
         const opp = league.teams[ug.h === user.id ? ug.a : ug.h];
@@ -367,7 +397,7 @@ export default function App({ resume = false }) {
         actions.push(<button key="sg" onClick={act.simDay}>Sim Game</button>);
       } else actions.push(<button key="sd" onClick={act.simDay}>Sim Day</button>);
       actions.push(<button key="sw" onClick={() => act.simDays(7, "Simulating a week")}>Week</button>);
-      if (league.day <= league.deadlineDay) actions.push(<button key="dl" onClick={act.simToDeadline} title="Sim to the trade deadline">To Deadline</button>);
+      if (league.day < league.deadlineDay) actions.push(<button key="dl" onClick={act.simToDeadline} title="Sim to Trade Deadline Day">To Deadline</button>);
       actions.push(<button key="se" onClick={act.simToEnd}>To End</button>);
     }
   }
@@ -402,6 +432,11 @@ export default function App({ resume = false }) {
     if (id === "draft" && league.phase === "draft") return "LIVE";
     if (id === "freeagency" && (league.phase === "resign" || league.phase === "freeagency")) return "OPEN";
     if (id === "playoffs" && league.phase === "playoffs") return "ON";
+    if (id === "deadline" && deadlinePending(league)) return "LIVE";
+    if (id === "block") {
+      const n = userOffers(league).length;
+      return n ? String(n) : null;
+    }
     return null;
   };
 
@@ -424,7 +459,7 @@ export default function App({ resume = false }) {
         </div>
         <div className="body">
           <div className="nav">
-            {NAV.map((n, i) =>
+            {NAV.filter((n) => !n.when || n.when(league)).map((n, i) =>
               n.sep ? (
                 <div key={"sep" + i} className="sep" />
               ) : (
@@ -449,6 +484,8 @@ export default function App({ resume = false }) {
                 {tab === "stats" && <StatsPage />}
                 {tab === "playoffs" && <PlayoffsPage act={act} />}
                 {tab === "trade" && <TradePage seed={tradeSeed} />}
+                {tab === "block" && <TradeBlockPage />}
+                {tab === "deadline" && <DeadlinePage />}
                 {tab === "freeagency" && <FreeAgencyPage />}
                 {tab === "draft" && <DraftPage act={act} />}
                 {tab === "league" && <LeaguePage />}

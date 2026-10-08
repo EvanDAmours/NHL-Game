@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useGame, TeamBadge, Ovr, PlayerName, money, POS_ORDER } from "./common.jsx";
-import { evaluateTrade, executeTrade, suggestBalance } from "../engine/trade.js";
+import { evaluateTrade, executeTrade, suggestBalance, tradingClosed } from "../engine/trade.js";
+import { noteUserTrade, onBlock, deadlineActive, fmtClock } from "../engine/market.js";
 import { pickLabel } from "../engine/draft.js";
 import { capSpace } from "../engine/roster.js";
 import { shownRatings } from "../engine/draft.js";
@@ -20,6 +21,7 @@ function Assets({ team, sel, setSel, selPicks, setSelPicks, mine }) {
         <span className="posbadge">{p.pos}</span>
         <Ovr v={r.ovr} src={minor ? undefined : p.src} />
         <PlayerName p={p} />
+        {onBlock(league, p.id) && <span className="pill" title="On the trade block">block</span>}
         <span className="dim small">{p.age}y · POT {r.pot}</span>
         <span className="small mono" style={{ marginLeft: "auto" }}>{minor && !p.signed ? "unsigned" : `${money(p.cap)}×${p.yrs}`}</span>
       </label>
@@ -55,7 +57,7 @@ function Assets({ team, sel, setSel, selPicks, setSelPicks, mine }) {
 }
 
 export default function TradePage({ seed }) {
-  const { league, commit, toast } = useGame();
+  const { league, commit, toast, go } = useGame();
   const user = league.teams[league.userTid];
   const others = league.teams.filter((t) => t.id !== user.id);
   const [partner, setPartner] = useState(others[0].id);
@@ -88,7 +90,7 @@ export default function TradePage({ seed }) {
       toast(ev.problems[0] || `${ai.abbr}: "${ev.mood}"`);
       return;
     }
-    executeTrade(league, offer);
+    noteUserTrade(league, offer, executeTrade(league, offer));
     toast(`Trade completed with ${ai.city}!`);
     reset();
     commit();
@@ -101,7 +103,7 @@ export default function TradePage({ seed }) {
   };
 
   const meter = Math.max(0, Math.min(1, ev.ratio / 1.4));
-  const deadlinePassed = league.phase === "regular" && league.day > league.deadlineDay;
+  const closed = tradingClosed(league);
 
   return (
     <div className="stack">
@@ -113,7 +115,13 @@ export default function TradePage({ seed }) {
         <span className="pill">{ev.contending ? "Contending — values proven players" : "Rebuilding — values youth & picks"}</span>
         <span className="muted small">{league.phase === "regular" ? `Deadline: ${dayToDate(league.year, league.deadlineDay)}` : ""}</span>
       </div>
-      {(deadlinePassed || league.phase === "playoffs") && <div className="notice warn">Trading is frozen until the playoffs end.</div>}
+      {closed && <div className="notice warn">Trading is frozen until the playoffs end.</div>}
+      {deadlineActive(league) && (
+        <div className="notice">
+          ⏰ Trade Deadline Day — it's {fmtClock(league.deadline.minute)} ET. Deals close at 3:00 PM.{" "}
+          <span className="link" onClick={() => go("deadline")}>Back to the deadline desk →</span>
+        </div>
+      )}
       <div className="panel">
         <div className="row between">
           <div className="row"><TeamBadge team={user} size={26} /> <b>You send</b> <span className="muted small">cap space {money(capSpace(league, user))}</span></div>

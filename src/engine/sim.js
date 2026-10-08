@@ -37,6 +37,7 @@ export function createGame(league, home, away, opts = {}) {
     so: null,
     winner: null,
     faceoffNext: true,
+    centerDraw: true,
     puck: { x: 100, y: 42.5 },
     poss: null,
     steps: 0,
@@ -216,6 +217,28 @@ function addBox(s, id, field, n = 1) {
   if (b && field in b) b[field] += n;
 }
 
+// Where the puck goes next, as a continuous path: a team that keeps the puck carries it
+// up ice and then cycles in the zone; after a turnover the other team starts from
+// where it won the puck. (Display only; it doesn't change any odds.)
+function movePuck(s, k, kept, spot) {
+  const from = spot || s.puck || { x: 100, y: 42.5 };
+  let d = zoneX(s, k, 1) > 100 ? from.x - 100 : 100 - from.x;
+  if (spot) d += randFloat(2, 12);
+  else if (kept) d = d < 48 ? Math.min(78, d + randFloat(14, 30)) : clamp(d + randFloat(-14, 10), 48, 84);
+  else d += randFloat(4, 16);
+  d = clamp(d, -80, 84);
+  const y = clamp(from.y + (rand() - 0.5) * (d > 48 ? 30 : 20), 10, 75);
+  return { x: zoneX(s, k, d), y };
+}
+
+function faceoffDot(s) {
+  const x = s.puck?.x ?? 100;
+  const y = chance(0.5) ? 20.5 : 64.5;
+  if (x > 135) return { x: 169, y };
+  if (x < 65) return { x: 31, y };
+  return { x: x > 100 ? 120 : 80, y };
+}
+
 function zoneX(s, k, depth) {
   // Home attacks right in odd periods; teams switch ends each period.
   const homeRight = s.period % 2 === 1;
@@ -257,8 +280,11 @@ export function stepGame(s) {
 
   // Faceoffs after stoppages.
   let foWinner = null;
+  let foSpot = null;
   if (s.faceoffNext || chance(0.16)) {
     s.faceoffNext = false;
+    foSpot = s.centerDraw ? { x: 100, y: 42.5 } : faceoffDot(s);
+    s.centerDraw = false;
     const ch = pickCenter(s.h, ice.h);
     const ca = pickCenter(s.a, ice.a);
     if (ch && ca) {
@@ -266,7 +292,7 @@ export function stepGame(s) {
       foWinner = chance(pH) ? "h" : "a";
       addBox(s, foWinner === "h" ? ch : ca, "fow");
       addBox(s, foWinner === "h" ? ca : ch, "fol");
-      if (s.live && rand() < 0.25) push(s, { t: "fo", side: foWinner, text: `${lastName(s[foWinner], foWinner === "h" ? ch : ca)} wins the draw.`, x: 100, y: 42.5 });
+      if (s.live && rand() < 0.25) push(s, { t: "fo", side: foWinner, text: `${lastName(s[foWinner], foWinner === "h" ? ch : ca)} wins the draw.`, x: foSpot.x, y: foSpot.y });
     }
   }
 
@@ -274,12 +300,16 @@ export function stepGame(s) {
   let pH = 0.5 + (R.h.ctrl - R.a.ctrl) * 0.006 + (R.h.n - R.a.n) * 0.14 + 0.01;
   if (foWinner) pH += foWinner === "h" ? 0.12 : -0.12;
   pH = clamp(pH, 0.12, 0.88);
-  const k = chance(pH) ? "h" : "a";
+  // Possession has momentum: about half the time the team with the puck keeps it.
+  // Fresh draws still follow pH, so each side's long-run share of possession is unchanged.
+  const keep = !foWinner && s.poss && chance(0.55);
+  const k = keep ? s.poss : chance(pH) ? "h" : "a";
   const o = other(k);
+  const kept = k === s.poss;
   s.poss = k;
   if (s.ppTime.h >= 0 && strengthPens(s, "a").length) s.ppTime.h += STEP; else s.ppTime.h = 0;
   if (s.ppTime.a >= 0 && strengthPens(s, "h").length) s.ppTime.a += STEP; else s.ppTime.a = 0;
-  s.puck = { x: zoneX(s, k, randFloat(5, 60)), y: randFloat(12, 73) };
+  s.puck = movePuck(s, k, kept, foSpot);
 
   // Hits by the team without the puck (and some by the puck carrier's side).
   for (const hk of ["h", "a"]) {
@@ -422,6 +452,7 @@ function goal(s, k, shooter, ice, empty, shotType, x, y) {
     }
   }
   const time = PERIOD - s.clock;
+  s.centerDraw = true;
   s.goals.push({ side: k, scorer: shooter, assists, period: s.period, phase: s.phase, time, type: empty ? "EN" : type, score: { ...s.score } });
   s.faceoffNext = true;
   if (s.live) {
@@ -466,6 +497,7 @@ function advanceClock(s) {
     s.pen[k] = s.pen[k].filter((p) => p.left > 0);
   }
   if (s.clock > 0) return;
+  s.centerDraw = true;
   // End of period.
   if (s.phase === "reg" && s.period < 3) {
     s.period++;

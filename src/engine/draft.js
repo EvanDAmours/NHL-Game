@@ -5,7 +5,7 @@ import { DRAFT_ROUNDS, isGoalie, isDefense, isForward, MAX_PROSPECTS } from "./c
 import { compareTeams } from "./standings.js";
 import { defaultArchetype } from "./ratings.js";
 
-const CLASS_SIZE = 260;
+const CLASS_SIZE = 170; // 4 rounds x 32 picks, plus some left undrafted
 const POS_MIX = [["C", 25], ["LW", 17], ["RW", 17], ["LD", 14], ["RD", 14], ["G", 8]];
 const LOTTERY_ODDS = [18.5, 13.5, 11.5, 9.5, 8.5, 7.5, 6.5, 6.0, 5.0, 3.5, 3.0, 2.5, 2.0, 1.5, 0.5, 0.5];
 
@@ -29,13 +29,21 @@ export function generateDraftClass(league, draftYear) {
     p.signed = false;
     p.rookie = true;
     p.consensus = gauss(0, 3);
-    p.scout = { lvl: 0, eOvr: Math.round(p.ovr + gauss(0, 4)), ePot: Math.round(p.pot + gauss(0, 5)) };
+    p.scout = { lvl: 0, ...estimate(p, 4, 5) };
     league.players[p.id] = p;
     ids.push(p.id);
   }
   league.draftClass = ids;
   league.draftClassYear = draftYear;
   return ids;
+}
+
+// A scout's read on a prospect: noisy, but never wildly off, and the ceiling he
+// reports is never below how good the player is today.
+function estimate(p, sdOvr, sdPot) {
+  const eOvr = Math.round(p.ovr + clamp(gauss(0, sdOvr), -1.8 * sdOvr, 1.8 * sdOvr));
+  const ePot = Math.max(eOvr + 1, Math.round(p.pot + clamp(gauss(0, sdPot), -1.8 * sdPot, 1.8 * sdPot)));
+  return { eOvr, ePot };
 }
 
 export function scoutCost(p) {
@@ -50,8 +58,7 @@ export function scoutProspect(league, pid) {
   team.scoutPts -= cost;
   p.scout.lvl++;
   if (p.scout.lvl === 1) {
-    p.scout.eOvr = Math.round(p.ovr + gauss(0, 1.8));
-    p.scout.ePot = Math.round(p.pot + gauss(0, 2.2));
+    Object.assign(p.scout, estimate(p, 1.8, 2.2));
   } else {
     p.scout.eOvr = p.ovr;
     p.scout.ePot = p.pot;
@@ -212,6 +219,25 @@ export function releaseProspect(league, pid) {
   const t = league.teams[p.tid];
   if (t) t.prospects = t.prospects.filter((x) => x !== pid);
   delete league.players[pid];
+}
+
+// How a prospect's ceiling reads to a scout.
+export function potentialTier(pot) {
+  if (pot >= 90) return "Franchise";
+  if (pot >= 86) return "Top line";
+  if (pot >= 82) return "Top six";
+  if (pot >= 78) return "Middle six";
+  if (pot >= 74) return "Depth";
+  return "Long shot";
+}
+
+// The range the user's scouts believe a rating falls in.
+export function ratingRange(p, which) {
+  const r = shownRatings(p);
+  const v = which === "pot" ? r.pot : r.ovr;
+  if (r.exact) return [v, v];
+  const spread = p.scout.lvl ? 2 : which === "pot" ? 5 : 4;
+  return [Math.max(40, v - spread), Math.min(99, v + spread)];
 }
 
 export function randomRoundSeed() {

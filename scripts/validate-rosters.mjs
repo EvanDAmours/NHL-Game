@@ -48,6 +48,7 @@ for (const [abbr, l] of Object.entries(data.lines || {})) {
     named.push([o.name, null]);
     if (!(o.games > 0 && o.games < 83)) problems.push(`${abbr} out: ${o.name} games must be 1-82`);
   }
+  for (const name of l.requests || []) if (!team.some((x) => x.name === name)) problems.push(`${abbr} requests: ${name} is not on the ${abbr} roster`);
   const seenHere = new Set();
   for (const [name, k] of named) {
     const p = team.find((x) => x.name === name);

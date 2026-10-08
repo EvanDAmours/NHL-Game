@@ -5,7 +5,7 @@ import LZString from "lz-string";
 import { TEAMS } from "./teams.js";
 import { seed as seedRng, randInt, pick, chance, gauss, clamp } from "./rng.js";
 import { createPlayer, generatePlayer, marketValue } from "./players.js";
-import { FIRST_SEASON, SCOUT_POINTS_PER_SEASON, SAVE_KEY, SAVE_VERSION, MAX_ROSTER, isGoalie, isDefense, minSalaryForYear } from "./constants.js";
+import { FIRST_SEASON, SCOUT_POINTS_PER_SEASON, SAVE_KEY, SAVE_VERSION, MAX_ROSTER, DRAFT_ROUNDS, isGoalie, isDefense, minSalaryForYear } from "./constants.js";
 import { autoLines, linesFromNames, lineupIds, coachLines } from "./lines.js";
 import { generateSchedule, lastDay } from "./schedule.js";
 import { createGame, simToEnd, applyResult, blankRecord } from "./sim.js";
@@ -14,6 +14,7 @@ import { startPlayoffs, simPlayoffDay } from "./playoffs.js";
 import { computeAwards, connSmythe } from "./awards.js";
 import { ensureMinimums, counts, sendDown, canSendDown, logTx, IR_GAMES } from "./roster.js";
 import { startResign, endResign, startNewSeason, aiManageRoster, ratingLevel } from "./offseason.js";
+import { marketWeek, deadlinePending, skipDeadline, refreshBlock, fitRoster, DEADLINE_END } from "./market.js";
 
 export function createLeague({ userAbbr = "TOR", mode = "real", difficulty = "normal", seed } = {}) {
   if (seed != null) seedRng(seed);
@@ -72,6 +73,7 @@ export function createLeague({ userAbbr = "TOR", mode = "real", difficulty = "no
   generateDraftClass(league, year + 1);
   league.schedule = generateSchedule(league.teams);
   league.deadlineDay = Math.floor(lastDay(league.schedule) * 0.78);
+  refreshBlock(league);
   league.inbox.push({ year, day: 0, text: `Welcome, GM of the ${user.city} ${user.name}! Rosters and ratings are from EA SPORTS NHL 27, and every team starts with its real opening-week line combinations. Check the Lines tab, then start the season.` });
   return league;
 }
@@ -85,6 +87,11 @@ function loadRealRosters(league) {
       p.rookie = p.age <= 20;
       league.players[p.id] = p;
       t.roster.push(p.id);
+    }
+    // Players who have asked to be traded.
+    for (const name of rosterFile.lines?.[t.abbr]?.requests || []) {
+      const p = t.roster.map((id) => league.players[id]).find((x) => x.name === name);
+      if (p) p.wantsTrade = true;
     }
     // Players reported injured (or otherwise unavailable) at the start of the season.
     for (const o of rosterFile.lines?.[t.abbr]?.out || []) {
@@ -206,10 +213,13 @@ export function playScheduledGame(league, g, state) {
 // Simulate the current day. If `holdUserGame`, the user's game is left for live play.
 export function simDay(league, { holdUserGame = false } = {}) {
   if (league.phase !== "regular") return false;
+  // The UI stops for Trade Deadline Day; anything else simulating through it runs it instantly.
+  if (deadlinePending(league)) skipDeadline(league);
   const todays = gamesOnDay(league, league.day).filter((g) => !g.played);
   const played = new Set();
   for (const t of league.teams) {
     ensureMinimums(league, t, { notify: t.id === league.userTid });
+    if (t.id !== league.userTid) fitRoster(league, t);
   }
   for (const g of todays) {
     if (holdUserGame && (g.h === league.userTid || g.a === league.userTid)) continue;
@@ -234,7 +244,10 @@ export function finishDay(league, played) {
       aiManageRoster(league, t, { inSeason: true });
       if (league.day >= 7) coachLines(league, t);
     }
+    if (league.day < league.deadlineDay) marketWeek(league);
   }
+  // Players back from injury or called up: keep AI rosters at 23.
+  for (const t of league.teams) if (t.id !== league.userTid) fitRoster(league, t);
   league.day++;
   while (league.day <= lastDay(league.schedule) && !gamesOnDay(league, league.day).length) league.day++;
 }
@@ -247,7 +260,7 @@ export function simDays(league, n, { stopAtUserGame = false } = {}) {
 }
 
 export function simToDeadline(league) {
-  while (league.phase === "regular" && league.day <= league.deadlineDay && !seasonOver(league)) simDay(league);
+  while (league.phase === "regular" && !deadlinePending(league) && !seasonOver(league)) simDay(league);
 }
 
 export function simRestOfSeason(league) {
@@ -295,6 +308,9 @@ export function goToFreeAgency(league) {
 export function beginNextSeason(league) {
   startNewSeason(league);
   league.deadlineDay = Math.floor(lastDay(league.schedule) * 0.78);
+  league.deadline = null;
+  league.offers = [];
+  refreshBlock(league);
 }
 
 // ---------- Save / load ----------
@@ -320,7 +336,20 @@ export function deserializeLeague(raw) {
     json = LZString.decompressFromUTF16(raw);
   }
   const l = json ? JSON.parse(json) : null;
-  return l && l.version === SAVE_VERSION ? l : null;
+  return l && l.version === SAVE_VERSION ? migrateLeague(l) : null;
+}
+
+// Bring older saves up to date with features added since they were made.
+function migrateLeague(l) {
+  // The draft went from 7 rounds to 4: drop later-round picks not already in a running draft.
+  l.draftPicks = (l.draftPicks || []).filter((pk) => pk.round <= DRAFT_ROUNDS || l.draft?.year === pk.year);
+  // Trade block and deadline day: a save already past this season's deadline doesn't replay it.
+  l.block = l.block || [];
+  l.offers = l.offers || [];
+  l.wire = l.wire || [];
+  if (l.phase === "regular" && l.day > l.deadlineDay && !l.deadline) l.deadline = { year: l.year, minute: DEADLINE_END, done: true, feed: [], trades: 0 };
+  if (l.phase === "playoffs" && !l.deadline) l.deadline = { year: l.year, minute: DEADLINE_END, done: true, feed: [], trades: 0 };
+  return l;
 }
 
 export function saveSummary(league) {

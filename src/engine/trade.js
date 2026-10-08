@@ -7,9 +7,27 @@ import { leagueTable } from "./standings.js";
 import { teamRatings } from "./lines.js";
 import { pickLabel } from "./draft.js";
 
+// Trading is open until the deadline passes (and again once the playoffs end).
+export function tradingClosed(league) {
+  if (league.phase === "playoffs") return true;
+  if (league.phase !== "regular") return false;
+  const dl = league.deadline;
+  if (dl && dl.year === league.year) return !!dl.done;
+  return league.day > league.deadlineDay;
+}
+
+// Top 14 by roster strength and record. Cached per league and day (not saved), since
+// the trade market asks about every team many times over.
+const contendCache = new WeakMap();
 export function isContending(league, team) {
-  const ranked = [...league.teams].map((t) => ({ id: t.id, r: teamRatings(league, t).ovr + (t.rec.gp ? (t.rec.pts / (2 * t.rec.gp) - 0.5) * 20 : 0) })).sort((a, b) => b.r - a.r);
-  return ranked.findIndex((x) => x.id === team.id) < 14;
+  const key = `${league.year}|${league.phase}|${league.day}|${league.deadline?.minute ?? ""}`;
+  let c = contendCache.get(league);
+  if (!c || c.key !== key) {
+    const ranked = [...league.teams].map((t) => ({ id: t.id, r: teamRatings(league, t).ovr + (t.rec.gp ? (t.rec.pts / (2 * t.rec.gp) - 0.5) * 20 : 0) })).sort((a, b) => b.r - a.r);
+    c = { key, set: new Set(ranked.slice(0, 14).map((x) => x.id)) };
+    contendCache.set(league, c);
+  }
+  return c.set.has(team.id);
 }
 
 export function projectedPickSlot(league, pk) {
@@ -38,13 +56,15 @@ export function assetValue(league, id, viewer) {
 // Franchise cornerstones cost extra to pry loose.
 function cornerstonePremium(league, team, id) {
   const top = team.roster.map((x) => league.players[x]).filter(Boolean).sort((a, b) => b.ovr - a.ovr).slice(0, 2).map((p) => p.id);
+  // A player who has asked out comes at a discount.
+  if (league.players[id]?.wantsTrade) return 0.85;
   return top.includes(id) ? 1.3 : 1;
 }
 
 export function evaluateTrade(league, offer) {
   const user = league.teams[offer.from];
   const ai = league.teams[offer.to];
-  const margin = (DIFFICULTY[league.settings.difficulty] || DIFFICULTY.normal).tradeMargin;
+  const margin = offer.margin ?? (DIFFICULTY[league.settings.difficulty] || DIFFICULTY.normal).tradeMargin;
   const contending = isContending(league, ai);
 
   const incoming = offer.give.map((id) => assetValue(league, id, ai));
@@ -59,8 +79,7 @@ export function evaluateTrade(league, offer) {
   valOut += pickOut.reduce((a, pk) => a + pickValue(league, pk, { contending }), 0);
 
   const problems = [];
-  const blocked = league.phase === "playoffs" || (league.phase === "regular" && league.day > league.deadlineDay);
-  if (blocked) problems.push("The trade deadline has passed.");
+  if (tradingClosed(league)) problems.push(league.phase === "playoffs" ? "Trading is closed during the playoffs." : "The trade deadline has passed.");
   if (!offer.give.length && !offer.get.length && !pickIn.length && !pickOut.length) problems.push("Add something to the deal.");
 
   // Cap & roster checks for both sides (roster players only; prospects don't count).
@@ -88,7 +107,7 @@ export function evaluateTrade(league, offer) {
   return { accept, ratio: Math.min(ratio, 2), valIn, valOut, problems, mood, contending };
 }
 
-export function executeTrade(league, offer) {
+export function executeTrade(league, offer, { record = true } = {}) {
   const user = league.teams[offer.from];
   const ai = league.teams[offer.to];
   const move = (id, fromT, toT) => {
@@ -119,8 +138,12 @@ export function executeTrade(league, offer) {
   const userSends = [...names(offer.give), ...picks(offer.givePicks)].join(", ") || "nothing";
   const aiSends = [...names(offer.get), ...picks(offer.getPicks)].join(", ") || "nothing";
   logTx(league, `TRADE: ${user.abbr} send ${userSends} to ${ai.abbr} for ${aiSends}`, [user.id, ai.id]);
+  league.block = (league.block || []).filter((b) => !offer.give.includes(b.pid) && !offer.get.includes(b.pid));
+  for (const id of [...offer.give, ...offer.get]) if (league.players[id]) league.players[id].wantsTrade = false;
+  if (!record) return { aSends: userSends, bSends: aiSends };
   league.tradeHistory = league.tradeHistory || [];
   league.tradeHistory.unshift({ year: league.year, day: league.day, a: user.id, b: ai.id, aSends: userSends, bSends: aiSends });
+  return { aSends: userSends, bSends: aiSends };
 }
 
 // Ask the AI what it would want added from the user's side to balance a deal.

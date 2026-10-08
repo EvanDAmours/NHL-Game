@@ -9,7 +9,8 @@ import { simDraftToUser, draftDone } from "../src/engine/draft.js";
 import { simFADay, expiringPlayers } from "../src/engine/offseason.js";
 import { counts, capSpace } from "../src/engine/roster.js";
 import { gameLines, syncLines, lineupIds } from "../src/engine/lines.js";
-import { evaluateTrade, executeTrade } from "../src/engine/trade.js";
+import { evaluateTrade, executeTrade, tradingClosed } from "../src/engine/trade.js";
+import { toggleUserBlock, deadlinePending, startDeadline, deadlineTick, userOffers, acceptOffer, DEADLINE_START, DEADLINE_END } from "../src/engine/market.js";
 import { parseRatingsCsv, matchRows, applyRatings } from "../src/engine/importer.js";
 import { MAX_ROSTER } from "../src/engine/constants.js";
 import rosterFile from "../src/data/nhl27-rosters.json" with { type: "json" };
@@ -99,7 +100,7 @@ test("full offseason cycle: playoffs, draft, re-sign, free agency, new season", 
   assert.equal(lg.phase, "draft");
   simDraftToUser(lg, { all: true });
   assert.ok(draftDone(lg));
-  assert.equal(lg.draft.slots.filter((s) => s.pid).length, 224);
+  assert.equal(lg.draft.slots.filter((s) => s.pid).length, 128);
   L.completeDraft(lg);
   assert.equal(lg.phase, "resign");
   const user = lg.teams[lg.userTid];
@@ -203,4 +204,39 @@ test("lines survive injuries and roster moves; returning players get their spot 
   assert.deepEqual(tor.lines.F[0], torBefore[0]);
   assert.deepEqual(tor.lines.F[1], torBefore[1]);
   assert.ok(tor.lines.F[2][0] && tor.lines.F[2][0] !== gone);
+});
+
+test("trade block circulates, AI teams deal, and Deadline Day closes trading at 3 PM", () => {
+  const lg = L.createLeague({ userAbbr: "CHI", seed: 21 });
+  assert.ok(lg.block.some((b) => lg.players[b.pid].name === "Connor Hellebuyck" && b.reason === "Requested a trade"));
+  const user = lg.teams[lg.userTid];
+  const listed = user.roster.map((id) => lg.players[id]).filter((p) => p.age >= 26).sort((a, b) => b.ovr - a.ovr).slice(2, 5);
+  for (const p of listed) toggleUserBlock(lg, p.id);
+  L.startRegularSeason(lg);
+  while (!deadlinePending(lg)) L.simDay(lg);
+  assert.ok(lg.wire.some((w) => w.kind === "trade"), "AI trades before the deadline");
+  for (const t of lg.teams) if (t.id !== lg.userTid) assert.ok(counts(lg, t).active <= MAX_ROSTER, `${t.abbr} roster size`);
+
+  startDeadline(lg);
+  assert.equal(lg.deadline.minute, DEADLINE_START);
+  let offers = 0;
+  while (!lg.deadline.done) {
+    deadlineTick(lg);
+    const o = userOffers(lg)[0];
+    if (o && !offers) {
+      const gave = o.give[0];
+      assert.ok(acceptOffer(lg, o.id).ok);
+      assert.equal(lg.players[gave].tid, o.tid, "accepted offer moves the player");
+    }
+    offers += userOffers(lg).length;
+  }
+  assert.equal(lg.deadline.minute, DEADLINE_END);
+  assert.ok(lg.deadline.trades >= 3, `deadline trades: ${lg.deadline.trades}`);
+  assert.ok(tradingClosed(lg));
+  const other = lg.teams.find((t) => t.id !== lg.userTid);
+  const ev = evaluateTrade(lg, { from: lg.userTid, to: other.id, give: [user.roster[0]], get: [other.roster[0]], givePicks: [], getPicks: [] });
+  assert.ok(ev.problems.includes("The trade deadline has passed."));
+  // The rest of the season sims normally after the deadline.
+  L.simRestOfSeason(lg);
+  assert.ok(L.seasonOver(lg));
 });

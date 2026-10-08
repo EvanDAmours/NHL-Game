@@ -24,7 +24,7 @@ export const MIN_GOALIES = 2;
 export const MAX_PROSPECTS = 20;
 
 export const GAMES_PER_TEAM = 82;
-export const DRAFT_ROUNDS = 7;
+export const DRAFT_ROUNDS = 4;
 export const FA_DAYS = 30;
 export const SCOUT_POINTS_PER_SEASON = 24;
 
