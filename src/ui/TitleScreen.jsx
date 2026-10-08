@@ -1,8 +1,12 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { TEAMS } from "../engine/teams.js";
 import { TeamBadge } from "./common.jsx";
-import { createLeague, hasSave, loadLeague, deleteSave, rosterFile, deserializeLeague } from "../engine/league.js";
+import { createLeague, loadLeague, deleteSave, rosterFile, deserializeLeague } from "../engine/league.js";
 import { DIFFICULTY } from "../engine/constants.js";
+import { cloudMeta, cloudLoad } from "../platform.js";
+
+const SEASON = (y) => `${y}-${String(y + 1).slice(2)}`;
+const when = (t) => (t ? new Date(t).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
 
 function teamStrength(abbr) {
   const ps = (rosterFile.teams[abbr] || []).map((p) => p.ovr).sort((a, b) => b - a);
@@ -11,8 +15,20 @@ function teamStrength(abbr) {
   return Math.round((top.reduce((a, b) => a + b, 0) / Math.max(1, top.length)) * 0.8 + g * 0.2);
 }
 
-export default function TitleScreen({ onStart }) {
-  const [step, setStep] = useState(hasSave() ? "menu" : "new");
+export default function TitleScreen({ onStart, ask }) {
+  const [local] = useState(() => loadLeague());
+  const [cloud, setCloud] = useState(null);
+  const [loadingCloud, setLoadingCloud] = useState(false);
+  const [step, setStep] = useState(local ? "menu" : "new");
+  useEffect(() => {
+    let live = true;
+    cloudMeta().then((m) => {
+      if (!live || !m) return;
+      setCloud(m);
+      setStep((s) => (s === "new" && !local ? "menu" : s));
+    });
+    return () => { live = false; };
+  }, [local]);
   const [abbr, setAbbr] = useState("TOR");
   const [mode, setMode] = useState("real");
   const [difficulty, setDifficulty] = useState("normal");
@@ -23,13 +39,20 @@ export default function TitleScreen({ onStart }) {
   const total = useMemo(() => Object.values(rosterFile.teams).flat().length, []);
 
   const cont = () => {
-    const lg = loadLeague();
-    if (!lg) {
+    if (!local) {
       setErr("Couldn't read the saved league. It may be from an older version.");
       return;
     }
+    onStart(local);
+  };
+  const contCloud = async () => {
+    setLoadingCloud(true);
+    const lg = await cloudLoad().catch(() => null);
+    setLoadingCloud(false);
+    if (!lg) return setErr("Couldn't load the cloud backup. Try again in a moment.");
     onStart(lg);
   };
+  const cloudNewer = cloud && (!local || (cloud.savedAt || 0) > (local.savedAt || 0) + 5000);
 
   const importFile = (e) => {
     const f = e.target.files?.[0];
@@ -45,8 +68,8 @@ export default function TitleScreen({ onStart }) {
     });
   };
 
-  const start = () => {
-    if (hasSave() && step === "new" && !window.confirm("Start a new league? Your current saved league will be replaced.")) return;
+  const start = async () => {
+    if ((local || cloud) && !(await ask({ title: "Start a new league?", body: "Your current saved league will be replaced. Export it from Settings first if you want to keep it.", yes: "Start new league", danger: true }))) return;
     deleteSave();
     const lg = createLeague({ userAbbr: abbr, mode, difficulty });
     onStart(lg);
@@ -64,14 +87,23 @@ export default function TitleScreen({ onStart }) {
               Hockey general manager · {rosterFile.season} rosters with <b>{rosterFile.game}</b> ratings
             </div>
           </div>
-          {step === "new" && hasSave() && <button onClick={() => setStep("menu")}>← Back</button>}
+          {step === "new" && (local || cloud) && <button onClick={() => setStep("menu")}>← Back</button>}
         </div>
 
         {err && <div className="notice bad">{err}</div>}
 
         {step === "menu" && (
           <div className="panel stack" style={{ maxWidth: 520 }}>
-            <button className="primary" style={{ padding: 14, fontSize: 15 }} onClick={cont}>Continue League</button>
+            {local && (
+              <button className={cloudNewer ? "" : "primary"} style={{ padding: 14, fontSize: 15 }} onClick={cont}>
+                Continue League <span className="small" style={{ opacity: 0.8, fontWeight: 500 }}>· {local.teams[local.userTid].abbr} {SEASON(local.year)}</span>
+              </button>
+            )}
+            {cloud && (cloudNewer || !local) && (
+              <button className="primary" style={{ padding: 14, fontSize: 15 }} onClick={contCloud} disabled={loadingCloud}>
+                {loadingCloud ? "Loading cloud backup…" : <>Continue from cloud backup <span className="small" style={{ opacity: 0.85, fontWeight: 500 }}>· {cloud.team} {SEASON(cloud.year)} · saved {when(cloud.savedAt)}</span></>}
+              </button>
+            )}
             <button onClick={() => setStep("new")}>New League</button>
             <label className="row" style={{ cursor: "pointer" }}>
               <span className="pill">Import league file…</span>

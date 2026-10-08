@@ -24,6 +24,8 @@ import { capSpace, rosterIssues } from "./engine/roster.js";
 import { simPlayoffDay, userSeries, nextGame } from "./engine/playoffs.js";
 import { simDraftToUser, draftDone, currentSlot } from "./engine/draft.js";
 import { simFADay } from "./engine/offseason.js";
+import { cloudSave } from "./platform.js";
+import ConfirmModal from "./ui/ConfirmModal.jsx";
 
 const NAV = [
   { id: "dashboard", label: "Dashboard", ico: "🏠" },
@@ -42,10 +44,15 @@ const NAV = [
   { id: "settings", label: "Settings", ico: "⚙️" },
 ];
 
-export default function App() {
+const CLOUD_EVERY_MS = 60000;
+
+export default function App({ resume = false }) {
   const leagueRef = useRef(null);
+  if (resume && !leagueRef.current) leagueRef.current = L.loadLeague();
   const [, setRev] = useState(0);
-  const [screen, setScreen] = useState("title");
+  const [screen, setScreen] = useState(leagueRef.current ? "game" : "title");
+  const [confirmReq, setConfirmReq] = useState(null);
+  const cloudRef = useRef({ last: 0, timer: null, phase: null, busy: false });
   const [tab, setTab] = useState("dashboard");
   const [modal, setModal] = useState(null);
   const [busy, setBusy] = useState(null);
@@ -62,11 +69,34 @@ export default function App() {
     showToast.t = setTimeout(() => setToast(null), ms);
   }, []);
 
+  // Cloud backup (claude.ai only): at most once a minute, plus at every phase change.
+  const syncCloud = useCallback((force = false) => {
+    const c = cloudRef.current;
+    const lg = leagueRef.current;
+    if (!lg) return;
+    const phaseChanged = c.phase !== null && c.phase !== lg.phase;
+    c.phase = lg.phase;
+    const wait = force || phaseChanged ? 0 : Math.max(0, CLOUD_EVERY_MS - (Date.now() - c.last));
+    if (c.timer && wait > 0) return;
+    clearTimeout(c.timer);
+    c.timer = setTimeout(async () => {
+      c.timer = null;
+      if (c.busy || !leagueRef.current) return;
+      c.busy = true;
+      c.last = Date.now();
+      await cloudSave(leagueRef.current);
+      c.busy = false;
+    }, wait);
+  }, []);
+
   const flushSave = useCallback(() => {
     clearTimeout(saveTimer.current);
     saveTimer.current = null;
-    if (leagueRef.current && !L.saveLeague(leagueRef.current)) showToast("⚠️ Couldn't auto-save (browser storage full?). Export your league from Settings.", 6000);
-  }, [showToast]);
+    if (!leagueRef.current) return;
+    const ok = L.saveLeague(leagueRef.current);
+    if (!ok && !cloudRef.current.last) showToast("⚠️ This browser didn't keep your save. Use Settings → Export league to keep a copy.", 6000);
+    syncCloud();
+  }, [showToast, syncCloud]);
 
   // Throttled autosave: at most one write per 400ms, never more than 400ms behind.
   const commit = useCallback(() => {
@@ -75,7 +105,11 @@ export default function App() {
   }, [flushSave]);
 
   useEffect(() => {
-    const flush = () => saveTimer.current && flushSave();
+    window.__rinkgm = { flush: () => (saveTimer.current ? flushSave() : null), inGame: () => !!leagueRef.current };
+    const flush = () => {
+      if (saveTimer.current) flushSave();
+      if (leagueRef.current && Date.now() - cloudRef.current.last > 5000) syncCloud(true);
+    };
     const onHide = () => document.visibilityState === "hidden" && flush();
     window.addEventListener("pagehide", flush);
     document.addEventListener("visibilitychange", onHide);
@@ -83,14 +117,19 @@ export default function App() {
       window.removeEventListener("pagehide", flush);
       document.removeEventListener("visibilitychange", onHide);
     };
-  }, [flushSave]);
+  }, [flushSave, syncCloud]);
 
   const startLeague = (lg) => {
     leagueRef.current = lg;
+    cloudRef.current.phase = lg.phase;
     setScreen("game");
     setTab("dashboard");
     commit();
+    syncCloud(true);
   };
+
+  // In-page confirmation (the claude.ai viewer doesn't show window.confirm).
+  const ask = useCallback((opts) => new Promise((resolve) => setConfirmReq({ ...opts, resolve })), []);
 
   // Run a long simulation in small chunks so the page stays responsive.
   const runChunked = useCallback((label, step, done) => {
@@ -130,17 +169,35 @@ export default function App() {
         setModal(null);
         setTab("trade");
       },
+      ask,
+      replaceLeague: (lg) => startLeague(lg),
       newGame: () => {
+        if (saveTimer.current) flushSave();
         leagueRef.current = null;
         setScreen("title");
       },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [leagueRef.current, commit, showToast]
+    [leagueRef.current, commit, showToast, ask]
+  );
+
+  const confirmEl = confirmReq && (
+    <ConfirmModal
+      req={confirmReq}
+      onAnswer={(ok) => {
+        confirmReq.resolve(ok);
+        setConfirmReq(null);
+      }}
+    />
   );
 
   if (screen === "title" || !league) {
-    return <TitleScreen onStart={startLeague} />;
+    return (
+      <>
+        <TitleScreen onStart={startLeague} ask={ask} />
+        {confirmEl}
+      </>
+    );
   }
 
   const user = league.teams[league.userTid];
@@ -417,6 +474,7 @@ export default function App() {
           </div>
         )}
         {toast && <div className="toast">{toast}</div>}
+        {confirmEl}
       </div>
     </GameCtx.Provider>
   );

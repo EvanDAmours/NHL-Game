@@ -31,10 +31,27 @@ class ErrorBoundary extends React.Component {
   }
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(
-  <React.StrictMode>
-    <ErrorBoundary>
-      <App />
-    </ErrorBoundary>
-  </React.StrictMode>
-);
+// When published on claude.ai, the viewer's update hook lets an open game
+// survive a new version: save first, then come back straight into the league.
+const hot = typeof window !== "undefined" ? window.claude?.hot : undefined;
+try {
+  hot?.snapshot?.(() => {
+    window.__rinkgm?.flush();
+    return { resume: !!window.__rinkgm?.inGame() };
+  });
+} catch {
+  /* not in a viewer */
+}
+
+function start(data) {
+  ReactDOM.createRoot(document.getElementById("root")).render(
+    <React.StrictMode>
+      <ErrorBoundary>
+        <App resume={!!data?.resume} />
+      </ErrorBoundary>
+    </React.StrictMode>
+  );
+}
+
+if (hot?.ready) hot.ready(start);
+else start(hot?.data ?? {});

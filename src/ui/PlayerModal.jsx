@@ -7,7 +7,7 @@ import { shownRatings } from "../engine/draft.js";
 import { sendDown, callUp, releasePlayer, canSendDown, hasRoomFor } from "../engine/roster.js";
 
 export default function PlayerModal({ pid }) {
-  const { league, closeModal, commit, toast, proposeTradeFor, go, openTeam } = useGame();
+  const { league, closeModal, commit, toast, proposeTradeFor, go, openTeam, ask } = useGame();
   const p = league.players[pid];
   const team = league.teams[p.tid];
   const mine = p.tid === league.userTid;
@@ -119,7 +119,7 @@ export default function PlayerModal({ pid }) {
           {mine && !inMinors && (
             <>
               <button disabled={!canSendDown(p)} onClick={() => { sendDown(league, team, p.id); commit(); closeModal(); }}>Send to minors</button>
-              <button className="danger" onClick={() => { if (window.confirm(`Release ${p.name}?`)) { releasePlayer(league, team, p.id); commit(); closeModal(); } }}>Release</button>
+              <button className="danger" onClick={async () => { if (await ask({ title: `Release ${p.name}?`, body: p.yrs > 0 && p.cap > 0 ? `His buyout leaves ${money(p.cap / 3)} of dead cap for ${p.yrs * 2} season(s).` : "He becomes a free agent.", yes: "Release", danger: true })) { releasePlayer(league, team, p.id); commit(); closeModal(); } }}>Release</button>
               <button onClick={() => proposeTradeFor(p.id)}>Put in a trade</button>
             </>
           )}

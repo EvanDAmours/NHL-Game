@@ -6,7 +6,7 @@ import { savePct, gaa } from "../engine/players.js";
 import { shownRatings } from "../engine/draft.js";
 
 export default function RosterPage() {
-  const { league, commit, toast } = useGame();
+  const { league, commit, toast, ask } = useGame();
   const [view, setView] = useState("roster");
   const user = league.teams[league.userTid];
   const roster = user.roster.map((id) => league.players[id]).filter(Boolean);
@@ -18,9 +18,9 @@ export default function RosterPage() {
     if (!sendDown(league, user, p.id)) return toast("Only players 23 or younger, or earning $1.25M or less, can be sent to the minors.");
     commit();
   };
-  const doRelease = (p) => {
+  const doRelease = async (p) => {
     const dead = p.yrs > 0 && p.cap > 0 ? ` His buyout leaves ${money(p.cap / 3)} of dead cap for ${p.yrs * 2} season(s).` : "";
-    if (!window.confirm(`Release ${p.name}?${dead}`)) return;
+    if (!(await ask({ title: `Release ${p.name}?`, body: `He becomes a free agent.${dead}`, yes: "Release", danger: true }))) return;
     releasePlayer(league, user, p.id);
     commit();
   };

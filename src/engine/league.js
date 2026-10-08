@@ -275,14 +275,32 @@ export function serializeLeague(league) {
   return LZString.compressToUTF16(JSON.stringify(league));
 }
 
+// Portable export: a small JSON wrapper around base64-compressed league data.
+export function exportLeagueText(league) {
+  return JSON.stringify({ rinkgm: SAVE_VERSION, league: LZString.compressToBase64(JSON.stringify(league)) });
+}
+
 export function deserializeLeague(raw) {
   if (!raw) return null;
-  const json = raw.startsWith("{") ? raw : LZString.decompressFromUTF16(raw);
+  let json;
+  if (raw.startsWith("{")) {
+    const obj = JSON.parse(raw);
+    if (obj && typeof obj.league === "string") json = LZString.decompressFromBase64(obj.league);
+    else return obj && obj.version === SAVE_VERSION ? obj : null;
+  } else {
+    json = LZString.decompressFromUTF16(raw);
+  }
   const l = json ? JSON.parse(json) : null;
   return l && l.version === SAVE_VERSION ? l : null;
 }
 
+export function saveSummary(league) {
+  const t = league.teams[league.userTid];
+  return { team: `${t.city} ${t.name}`, year: league.year, phase: league.phase };
+}
+
 export function saveLeague(league, key = SAVE_KEY) {
+  league.savedAt = Date.now();
   try {
     localStorage.setItem(key, serializeLeague(league));
     return true;

@@ -6,11 +6,16 @@ Rink GM follows the game loop of [Gridiron GM](https://github.com/VaultSparkStud
 
 ## Play
 
+**In your browser, no install:** open the hosted copy at https://claude.ai/artifact/GrqMjREPGaoVBivTUwNiw8. It's private to its owner until shared from the page's Share menu. Your league saves in the browser automatically, and when you're signed in to Claude it's also backed up to your account so you can continue on another device.
+
+**Locally:**
+
 ```bash
 npm install
 npm run dev        # http://localhost:5173
 npm run build      # static site in dist/ (relative paths, host anywhere)
 npm test           # engine tests (schedule, sim calibration, offseason, trades, import, saves)
+npm run build:artifact   # one self-contained page: dist/rink-gm.html
 ```
 
 ## Features
