@@ -1,5 +1,5 @@
 // Team management: payroll, roster limits, signing, releasing, call-ups.
-import { capForYear, MAX_ROSTER, MIN_FORWARDS, MIN_DEFENSE, MIN_GOALIES, isForward, isDefense, isGoalie, ELC_SALARY, minSalaryForYear } from "./constants.js";
+import { capForYear, capFloorForYear, MAX_ROSTER, MIN_FORWARDS, MIN_DEFENSE, MIN_GOALIES, isForward, isDefense, isGoalie, ELC_SALARY, minSalaryForYear } from "./constants.js";
 import { generatePlayer, marketValue, round2 } from "./players.js";
 import { randInt, pick } from "./rng.js";
 import { syncLines } from "./lines.js";
@@ -47,6 +47,11 @@ export function rosterIssues(league, team) {
   if (all.active > MAX_ROSTER) issues.push(`Roster has ${all.active} active players (max ${MAX_ROSTER}). Send someone to the minors or release.`);
   if (capSpace(league, team) < 0) issues.push(`Over the salary cap by $${(-capSpace(league, team)).toFixed(2)}M.`);
   return issues;
+}
+
+// How far a team's payroll is under the cap floor (0 if it's above it).
+export function capFloorGap(league, team) {
+  return round2(Math.max(0, capFloorForYear(capYear(league)) - payroll(league, team)));
 }
 
 export function hasRoomFor(league, team, extra = 1) {

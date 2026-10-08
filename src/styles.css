@@ -425,7 +425,7 @@ table.t td.num, table.t th.num { text-align: right; font-variant-numeric: tabula
 .ticker:hover:not(:disabled) { background: #330f18; }
 .ticker-k { flex: none; padding: 6px 12px; background: var(--bad); color: #fff; font-family: var(--mono); font-size: 12px; white-space: nowrap; }
 .ticker-win { flex: 1; overflow: hidden; white-space: nowrap; }
-.ticker-track { display: inline-block; padding-left: 100%; animation: tickerScroll 38s linear infinite; }
+.ticker-track { display: inline-block; padding-left: 12px; animation: tickerScroll 38s linear 1.5s infinite; }
 @keyframes tickerScroll { to { transform: translateX(-100%); } }
 @media (prefers-reduced-motion: reduce) { .ticker-track { animation: none; padding-left: 12px; } }
 .stance { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

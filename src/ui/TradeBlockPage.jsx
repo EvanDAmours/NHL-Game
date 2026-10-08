@@ -22,7 +22,13 @@ export function OfferCard({ o, compact = false }) {
     toast(r.msg, 4500);
     commit();
   };
-  const until = deadlineActive(league) ? `until ${fmtClock(Math.min(o.expMin ?? DEADLINE_END, DEADLINE_END))}` : `expires ${dayToDate(league.year, o.expDay)}`;
+  const until = deadlineActive(league)
+    ? `until ${fmtClock(Math.min(o.expMin ?? DEADLINE_END, DEADLINE_END))}`
+    : o.expFa != null
+      ? `open ${Math.max(1, o.expFa - (league.fa?.day ?? 0) + 1)} more day${o.expFa - (league.fa?.day ?? 0) ? "s" : ""}`
+      : o.expDay != null
+        ? `expires ${dayToDate(league.year, o.expDay)}`
+        : "open until the next phase";
   return (
     <div className={`offercard${compact ? " compact" : ""}`}>
       <div className="row" style={{ gap: 8 }}>
@@ -46,7 +52,7 @@ export function OfferCard({ o, compact = false }) {
 
 export function WireItem({ w, showWhen = true }) {
   const { league } = useGame();
-  const when = w.min != null ? fmtClock(w.min) : w.phase && w.phase !== "regular" ? `${w.year + 1} off-season` : dayToDate(w.year, w.day);
+  const when = w.min != null ? fmtClock(w.min) : w.phase === "preseason" ? `${w.year} preseason` : w.phase && w.phase !== "regular" ? `${w.year + 1} off-season` : dayToDate(w.year, w.day);
   if (w.kind === "trade" && w.a != null) {
     const A = league.teams[w.a];
     const B = league.teams[w.b];

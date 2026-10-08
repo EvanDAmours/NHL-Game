@@ -7,13 +7,16 @@ import { generateAttributes, computeOvr } from "../src/engine/ratings.js";
 import { simPlayoffDay } from "../src/engine/playoffs.js";
 import { simDraftToUser, draftDone } from "../src/engine/draft.js";
 import { simFADay, expiringPlayers } from "../src/engine/offseason.js";
-import { counts, capSpace, canSendDown, releasePlayer } from "../src/engine/roster.js";
+import { counts, capSpace, canSendDown, releasePlayer, payroll } from "../src/engine/roster.js";
+import { marketValue } from "../src/engine/players.js";
+import { faAsk } from "../src/engine/offseason.js";
+import { restShare } from "../src/engine/sim.js";
 import { gameLines, syncLines, lineupIds } from "../src/engine/lines.js";
 import { evaluateTrade, executeTrade, tradingClosed, isContending } from "../src/engine/trade.js";
 import { toggleUserBlock, onBlock, deadlinePending, startDeadline, deadlineTick, userOffers, acceptOffer, DEADLINE_START, DEADLINE_END } from "../src/engine/market.js";
 import { conferenceTable } from "../src/engine/standings.js";
 import { parseRatingsCsv, matchRows, applyRatings } from "../src/engine/importer.js";
-import { MAX_ROSTER } from "../src/engine/constants.js";
+import { MAX_ROSTER, capFloorForYear } from "../src/engine/constants.js";
 import rosterFile from "../src/data/nhl27-rosters.json" with { type: "json" };
 
 test("roster file: 32 teams, valid entries, no duplicates", () => {
@@ -111,6 +114,8 @@ test("full offseason cycle: playoffs, draft, re-sign, free agency, new season", 
   L.beginNextSeason(lg);
   assert.equal(lg.phase, "preseason");
   assert.equal(lg.year, 2027);
+  // Every AI club reaches the cap floor (by signing players or paying the shortfall).
+  for (const t of lg.teams) if (t.id !== lg.userTid) assert.ok(payroll(lg, t) >= capFloorForYear(lg.year) - 0.01, `${t.abbr} under the floor`);
   assert.equal(lg.history.length, 1);
   for (const t of lg.teams) {
     if (t.id === lg.userTid) continue;
@@ -290,4 +295,33 @@ test("trade market review fixes: goalies move, no buried vets, standings-based b
   L.finishPlayoffs(lg);
   assert.ok(!tradingClosed(lg));
   assert.ok(lg.block.filter((b) => b.tid !== lg.userTid).length > 0, "off-season block");
+});
+
+test("contracts look like the NHL's, and the goalie rest setting is honoured", () => {
+  const lg = L.createLeague({ userAbbr: "BOS", seed: 8 });
+  const find = (n) => Object.values(lg.players).find((p) => p.name === n);
+  // Stars get star money, even in their 30s; depth players get close to the minimum.
+  assert.ok(marketValue(find("Nikita Kucherov"), 2027) >= 12, "Kucherov");
+  assert.ok(marketValue(find("Connor McDavid"), 2027) >= 15, "McDavid");
+  assert.ok(marketValue(find("Auston Matthews"), 2027) >= 11, "Matthews");
+  const depth = Object.values(lg.players).find((p) => p.tid >= 0 && p.ovr <= 72 && p.age >= 25);
+  assert.ok(marketValue(depth, 2027) <= 1.2, "depth");
+  // A free agent's ask never collapses: on the last day of free agency a star still wants 90%+.
+  const kuch = find("Nikita Kucherov");
+  lg.phase = "freeagency";
+  lg.fa = { day: 0 };
+  const open = faAsk(lg, kuch).aav;
+  lg.fa.day = 30;
+  assert.ok(faAsk(lg, kuch).aav >= open * 0.9, "ask holds");
+  lg.phase = "preseason";
+  delete lg.fa;
+  // Goalie rest: the user's choice drives starts; AI tandems split more evenly.
+  const user = lg.teams[lg.userTid];
+  user.restPct = 40;
+  assert.equal(restShare(lg, user), 0.4);
+  L.startRegularSeason(lg);
+  L.simRestOfSeason(lg);
+  const starter = lg.players[user.lines.G[0]];
+  const backup = lg.players[user.lines.G[1]];
+  assert.ok(backup.stats.gp >= 25 && starter.stats.gp <= 57, `starts ${starter.stats.gp}/${backup.stats.gp}`);
 });

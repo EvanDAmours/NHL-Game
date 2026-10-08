@@ -59,10 +59,17 @@ export function generatePlayer(pos, ovr, age, year, extra = {}) {
 }
 
 // Market AAV ($M) for a player of a given OVR at age, scaled to the cap.
+// What a player earns on the open market under a $104M cap (2026-27), by overall.
+// Anchors: 99s and 97s get $15-17M (Kaprizov $17M, Draisaitl $14M, Matthews $13.25M),
+// 92-94 first-liners $12-13M, 88 top-line or top-pair players about $8.6M, middle-six
+// forwards and second-pair D (80-86) $3.3-7.4M, depth near the league minimum. A full
+// roster priced this way comes to roughly the cap, as NHL payrolls do.
 const VALUE_TABLE = [
-  [60, 0.85], [72, 0.85], [75, 1.0], [78, 1.5], [80, 2.0], [82, 3.0], [84, 4.25], [86, 5.5],
-  [88, 7.0], [90, 8.5], [92, 10.0], [94, 11.5], [96, 13.0], [98, 14.5], [99, 15.5],
+  [60, 0.85], [72, 0.85], [75, 1.3], [76, 1.6], [78, 2.3], [80, 3.3], [82, 4.6], [84, 6.0],
+  [86, 7.4], [88, 8.6], [90, 10.2], [92, 11.8], [94, 13.3], [96, 14.6], [98, 15.8], [99, 16.5],
 ];
+// Older players still get paid for what they do now, on shorter deals.
+const AGE_FACTOR = { 31: 0.97, 32: 0.94, 33: 0.9, 34: 0.85, 35: 0.8, 36: 0.73, 37: 0.66, 38: 0.6 };
 export function marketValue(p, year) {
   const ovr = p.ovr;
   let v = VALUE_TABLE[0][1];
@@ -76,7 +83,7 @@ export function marketValue(p, year) {
     v = v2;
   }
   v *= capForYear(year) / 104;
-  if (p.age >= 31) v *= Math.max(0.45, 1 - 0.07 * (p.age - 30));
+  if (p.age >= 31) v *= AGE_FACTOR[p.age] ?? 0.55;
   if (p.age <= 22 && p.pot > p.ovr) v *= 1 + Math.min(0.25, (p.pot - p.ovr) * 0.03);
   if (isGoalie(p.pos)) v *= 0.85;
   return round2(clamp(v, minSalaryForYear(year), maxSalaryForYear(year)));

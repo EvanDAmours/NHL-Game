@@ -2,7 +2,7 @@
 // rollover into a new season (aging, development, retirements, new schedule).
 import { clamp, chance, shuffle, randInt, gauss } from "./rng.js";
 import { contractAsk, developPlayer, retirementChance, blankStats, marketValue, generatePlayer, isRFA, round2 } from "./players.js";
-import { capForYear, minSalaryForYear, maxSalaryForYear, DIFFICULTY, FA_DAYS, SCOUT_POINTS_PER_SEASON, isGoalie, isDefense, isForward, MAX_ROSTER } from "./constants.js";
+import { capForYear, capFloorForYear, minSalaryForYear, maxSalaryForYear, DIFFICULTY, FA_DAYS, SCOUT_POINTS_PER_SEASON, isGoalie, isDefense, isForward, MAX_ROSTER } from "./constants.js";
 import { payroll, capSpace, counts, signPlayer, releasePlayer, callUp, sendDown, canSendDown, logTx, ensureMinimums, hasRoomFor } from "./roster.js";
 import { teamRatings, autoLines, syncLines } from "./lines.js";
 import { generateSchedule } from "./schedule.js";
@@ -97,6 +97,8 @@ export function endResign(league) {
       }
       let keep = p.ovr >= 86 ? 0.9 : p.ovr >= 82 ? 0.7 : p.ovr >= 78 ? 0.45 : 0.15;
       if (isRFA(p)) keep += 0.2;
+      // Clubs under next season's cap floor hang on to more of their own players.
+      if (payroll(league, t) < capFloorForYear(league.year + 1)) keep += 0.25;
       if (p.age >= 35) keep *= 0.5;
       const ask = resignAsk(league, p);
       if (chance(keep) && ask.aav <= capSpace(league, t) - 1) {
@@ -129,8 +131,11 @@ export function faAsk(league, p, yrs) {
   const offseason = league.phase === "freeagency" || league.phase === "resign";
   const year = offseason ? league.year + 1 : league.year;
   const base = contractAsk(p, year, { mood: p.mood ?? 0.5, mult: diff(league).faAskMult });
+  // Unsigned players come down a little as free agency drags on, but never to bargain
+  // prices: stars hold out near their number.
   const day = offseason ? league.fa?.day || 0 : FA_DAYS + 10;
-  const decay = Math.pow(0.986, day);
+  const floor = p.ovr >= 88 ? 0.92 : p.ovr >= 82 ? 0.88 : 0.82;
+  const decay = Math.max(floor, Math.pow(0.992, day));
   const term = yrs ?? base.yrs;
   const aav = round2(clamp(base.aav * decay * (1 + 0.025 * Math.abs(term - base.yrs)), minSalaryForYear(year), maxSalaryForYear(year)));
   return { aav, yrs: term, prefYrs: base.yrs };
@@ -177,23 +182,35 @@ export function simFADay(league) {
       }
       continue;
     }
-    // Teams with room under the cap chase upgrades over their weakest regular.
-    if (space < 4 || !chance(0.2)) continue;
+    // Teams with room under the cap chase upgrades over their weakest regular; the first
+    // few days are a frenzy for the best names. Clubs under the cap floor have to spend.
+    const floorGap = capFloorForYear(league.year + 1) - payroll(league, t);
+    const mustSpend = floorGap > 0;
+    // A club with lots of room (12%+ of the cap) keeps shopping all month, like real
+    // teams do; everyone else picks spots.
+    const flush = space > capForYear(league.year + 1) * 0.12;
+    if (space < 3 || !chance(mustSpend ? 0.9 : flush ? 0.5 : league.fa.day <= 3 ? 0.6 : 0.25)) continue;
     const grp = (p) => (isGoalie(p.pos) ? "G" : isDefense(p.pos) ? "D" : "F");
-    const roster = t.roster.map((id) => league.players[id]).filter(Boolean);
-    const upgrade = pool().find((p) => {
-      if (faAsk(league, p).aav > space - 1.5) return false;
-      const worst = roster.filter((x) => grp(x) === grp(p)).sort((a, b) => a.ovr - b.ovr)[0];
-      return worst && p.ovr >= worst.ovr + 3 && (grp(p) !== "G" || p.ovr > roster.filter((x) => grp(x) === "G").sort((a, b) => b.ovr - a.ovr)[1]?.ovr + 2);
-    });
-    if (upgrade) {
+    for (let n = mustSpend || flush ? 2 : 1; n > 0; n--) {
+      const roster = t.roster.map((id) => league.players[id]).filter(Boolean);
+      const room = capSpace(league, t);
+      const upgrade = pool().find((p) => {
+        if (faAsk(league, p).aav > room - 1.5) return false;
+        const worst = roster.filter((x) => grp(x) === grp(p)).sort((a, b) => a.ovr - b.ovr)[0];
+        return worst && p.ovr >= worst.ovr + (mustSpend || flush ? 1 : 3) && (grp(p) !== "G" || p.ovr > roster.filter((x) => grp(x) === "G").sort((a, b) => b.ovr - a.ovr)[1]?.ovr + 2);
+      });
+      if (!upgrade) break;
       const worst = roster.filter((x) => grp(x) === grp(upgrade)).sort((a, b) => a.ovr - b.ovr)[0];
       if (!hasRoomFor(league, t)) {
         if (canSendDown(worst)) sendDown(league, t, worst.id);
         else releasePlayer(league, t, worst.id);
       }
       const ask = faAsk(league, upgrade);
-      signPlayer(league, t, upgrade, ask.aav, ask.yrs);
+      // A club short of the floor pays over the ask to get there.
+      const gap = capFloorForYear(league.year + 1) - payroll(league, t);
+      const aav = gap > 0 ? round2(Math.min(capSpace(league, t) - 0.5, ask.aav + Math.min(gap, ask.aav * 0.3))) : ask.aav;
+      signPlayer(league, t, upgrade, Math.max(ask.aav, aav), ask.yrs);
+      if (!flush && payroll(league, t) >= capFloorForYear(league.year + 1)) break;
     }
   }
   return league.fa.day >= FA_DAYS;
@@ -207,6 +224,34 @@ export function ratingLevel(league) {
   ovrs.sort((a, b) => b - a);
   const top = ovrs.slice(0, 600);
   return top.reduce((a, b) => a + b, 0) / Math.max(1, top.length);
+}
+
+// An AI club still under the cap floor when the season starts signs the best free agents
+// left (paying over the ask if it has to) until it gets there, as the CBA requires.
+export function meetCapFloor(league, t) {
+  const grp = (p) => (isGoalie(p.pos) ? "G" : isDefense(p.pos) ? "D" : "F");
+  let guard = 0;
+  while (payroll(league, t) < capFloorForYear(league.year) && guard++ < 6) {
+    const gap = capFloorForYear(league.year) - payroll(league, t);
+    const roster = t.roster.map((id) => league.players[id]).filter(Boolean);
+    const fa = league.freeAgents.map((id) => league.players[id]).filter(Boolean).sort((a, b) => b.ovr - a.ovr).find((p) => {
+      const worst = roster.filter((x) => grp(x) === grp(p)).sort((a, b) => a.ovr - b.ovr)[0];
+      return worst && p.ovr >= worst.ovr && faAsk(league, p).aav <= capSpace(league, t) - 0.5;
+    });
+    if (!fa) break;
+    const worst = roster.filter((x) => grp(x) === grp(fa)).sort((a, b) => a.ovr - b.ovr)[0];
+    if (!hasRoomFor(league, t)) {
+      if (canSendDown(worst)) sendDown(league, t, worst.id);
+      else releasePlayer(league, t, worst.id);
+    }
+    const ask = faAsk(league, fa);
+    const aav = round2(Math.min(capSpace(league, t) - 0.5, Math.max(ask.aav, Math.min(ask.aav * 1.6, ask.aav + gap))));
+    signPlayer(league, t, fa, Math.max(ask.aav, aav), ask.yrs);
+  }
+  // Still short: under the CBA the shortfall is paid out to the club's players, and it
+  // counts against the cap for the season.
+  const short = round2(capFloorForYear(league.year) - payroll(league, t));
+  if (short > 0.05) t.deadCap.push({ name: "Cap floor shortfall (paid to players)", amt: short, yrs: 1 });
 }
 
 export function startNewSeason(league) {
@@ -265,7 +310,10 @@ export function startNewSeason(league) {
         releaseProspect(league, id);
       }
     }
-    if (t.id !== league.userTid) aiManageRoster(league, t);
+    if (t.id !== league.userTid) {
+      aiManageRoster(league, t);
+      meetCapFloor(league, t);
+    }
     // AI coaches start fresh each fall; the user's combinations carry over.
     t.nhlLines = null;
     if (t.id === league.userTid) syncLines(league, t);

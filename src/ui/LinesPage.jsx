@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { useGame, Ovr, TeamBadge } from "./common.jsx";
 import { autoLines, resetNhlLines, syncLines, gameLines, healthy, teamRatings, lineupIds } from "../engine/lines.js";
 import { isGoalie, isForward } from "../engine/constants.js";
+import { restShare, REST_OPTIONS } from "../engine/sim.js";
 
 // Daily Faceoff-style line chart: forward lines, defence pairs, special-teams units,
 // goalies and the injury list. Tap one player, then another, to swap them.
@@ -223,11 +224,21 @@ export default function LinesPage() {
               {card({ g: "G", i: 0 }, "G", { big: true })}
               {card({ g: "G", i: 1 }, "G", { big: true })}
             </div>,
-            mine && (
-              <label className="row small" style={{ marginLeft: "auto" }}>
-                <input type="checkbox" checked={team.autoGoalie !== false} onChange={(e) => { team.autoGoalie = e.target.checked; commit(); }} />
-                Rest starter (~20%)
+            mine ? (
+              <label className="row small" style={{ marginLeft: "auto" }} title="How often your backup starts in the regular season. The starter plays every playoff game.">
+                Starter rests
+                <select value={Math.round(restShare(league, team) * 100)} onChange={(e) => { team.restPct = Number(e.target.value); team.autoGoalie = team.restPct > 0; commit(); }} aria-label="How often the starter rests">
+                  {REST_OPTIONS.map((r) => (
+                    <option key={r} value={r}>
+                      {r === 0 ? "never" : `${r}%`} · ~{Math.round(82 * (1 - r / 100))} starts{r === 20 ? " (typical)" : r >= 40 ? " (1A/1B)" : ""}
+                    </option>
+                  ))}
+                </select>
               </label>
+            ) : (
+              <span className="muted small" style={{ marginLeft: "auto" }}>
+                {Math.round(restShare(league, team) * 100) >= 40 ? "1A/1B tandem" : `Backup starts ~${Math.round(restShare(league, team) * 100)}%`}
+              </span>
             )
           )}
         </div>

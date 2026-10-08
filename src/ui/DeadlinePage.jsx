@@ -20,7 +20,7 @@ export function DeadlineTicker({ league, onOpen }) {
     <button type="button" className="ticker" onClick={onOpen} title="Open the deadline desk">
       <span className="ticker-k">⏰ {fmtClock(dl.minute)} ET</span>
       <span className="ticker-win">
-        <span className="ticker-track" key={items.length}>{text}</span>
+        <span className="ticker-track" key={items.length} style={{ animationDuration: `${Math.max(18, Math.round(text.length / 7))}s` }}>{text}</span>
       </span>
     </button>
   );
@@ -186,7 +186,7 @@ export default function DeadlinePage() {
               <BlockList entries={available} limit={12} />
             </div>
           )}
-          <Stance league={league} />
+          {!done && <Stance league={league} />}
           {!done && (
             <div className="panel">
               <h3>Shop your players</h3>

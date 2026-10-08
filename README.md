@@ -8,6 +8,8 @@ Rink GM follows the game loop of [Gridiron GM](https://github.com/VaultSparkStud
 
 **In your browser, no install:** open the hosted copy at https://claude.ai/artifact/GrqMjREPGaoVBivTUwNiw8. It's private to its owner until shared from the page's Share menu. Your league saves in the browser automatically, and when you're signed in to Claude it's also backed up to your account so you can continue on another device.
 
+**Share it with a friend (no downloads, no account):** the repo publishes the game to GitHub Pages at https://evandamours.github.io/NHL-Game/ through `.github/workflows/pages.yml`. One-time setup: on GitHub open *Settings → Pages → Build and deployment* and set *Source* to **GitHub Actions**, then run *Actions → Deploy to GitHub Pages → Run workflow* (after that, every push redeploys). Anyone with the link can play; each player's league saves in their own browser, and *Settings → Export league file* moves a save between devices.
+
 **Locally:**
 
 ```bash
@@ -29,6 +31,8 @@ npm run build:artifact   # one self-contained page: dist/rink-gm.html
 - **Playoffs**: 16 teams, a fixed divisional bracket, best-of-7 series with 2-2-1-1-1 home ice.
 - **Trade block**: teams shop players who don't fit their plans (veterans on rebuilding clubs, pending UFAs, cap casualties, surplus goalies, healthy scratches, and players who've asked out, like Connor Hellebuyck). The list turns over every week, AI teams make deals with each other, and every listing shows which teams are linked. Put your own players on the block and interested teams send offers you can accept or decline.
 - **Trade Deadline Day**: the season stops on deadline day for a TV-style deadline show. A clock runs from 8:00 AM to the 3:00 PM ET deadline, a breaking-news feed fills with trades and rumours (faster in the last hour), teams call with offers for your players, and you can make your own deals until time runs out.
+- **Contracts that look like the NHL's**: market value follows a 2026-27 pay scale (about $16M for a 99, $12M for a 92, $8.6M for an 88, $3-7M for middle-six forwards and second-pair D, near the minimum for depth) and grows with the cap. Veterans keep most of their value into their mid-30s on shorter deals. Free agents hold close to their ask instead of dropping to bargain prices, the best ones go in the first days to teams with room, and every AI club reaches the cap floor (or pays the shortfall to its players, as the CBA requires).
+- **Goalie workload**: choose how often your starter rests, from never to 50% (a true 1A/1B tandem), and see the expected starts. AI teams with two close goalies split the net too.
 - **Front office**: the salary cap ($104M in 2026-27, $113.5M in 2027-28, then growth), a 23-man roster with minors call-ups and send-downs, buyouts with dead cap, re-signing with RFA/UFA and player mood, a 30-day free agency with AI bidding, and trades with an AI that values players, prospects and picks differently when contending or rebuilding.
 - **Draft**: an NHL two-draw lottery, 4 rounds, 128 picks, generated prospect classes, and a scouting budget that narrows the uncertainty on prospect ratings. The draft screen shows who's on the clock, the next picks, a best-available board with "Now" and "Ceiling" ranges and a plain-language ceiling (Franchise, Top line, Top six...), and the full order round by round.
 - **Long-term play**: aging, development and retirement, career stats, league history and transaction logs. Saves are compressed in localStorage, and you can export or import league files.

@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useGame, Table, PlayerName, Ovr, money, pct, signed, POS_ORDER } from "./common.jsx";
-import { isGoalie, isDefense, capForYear, MAX_ROSTER, ARCHETYPES } from "../engine/constants.js";
-import { capSpace, payroll, counts, sendDown, callUp, releasePlayer, canSendDown, rosterIssues, hasRoomFor, ensureMinimums, capYear } from "../engine/roster.js";
+import { isGoalie, isDefense, capForYear, capFloorForYear, MAX_ROSTER, ARCHETYPES } from "../engine/constants.js";
+import { capSpace, payroll, counts, sendDown, callUp, releasePlayer, canSendDown, rosterIssues, hasRoomFor, ensureMinimums, capYear, capFloorGap } from "../engine/roster.js";
 import { savePct, gaa } from "../engine/players.js";
 import { shownRatings } from "../engine/draft.js";
 
@@ -86,6 +86,11 @@ export default function RosterPage() {
           {issues.some((i) => i.startsWith("Need")) && (
             <button className="small" style={{ marginTop: 6 }} onClick={() => { ensureMinimums(league, user, { notify: true }); commit(); }}>Auto-fill with call-ups</button>
           )}
+        </div>
+      )}
+      {capFloorGap(league, user) > 0 && (
+        <div className="notice">
+          You're {money(capFloorGap(league, user))} under the {money(capFloorForYear(capYear(league)))} cap floor. NHL teams have to spend at least that much; sign free agents or trade for salary to get there.
         </div>
       )}
       <div className="tabs">

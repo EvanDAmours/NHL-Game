@@ -50,6 +50,18 @@ export function createGame(league, home, away, opts = {}) {
   return s;
 }
 
+export const REST_OPTIONS = [0, 10, 20, 30, 40, 50];
+
+// How often the starter sits in the regular season. The user picks it (Lines tab);
+// AI teams split the net when their two goalies are close (1A/1B tandems).
+export function restShare(league, team, userTeam = team.id === league.userTid) {
+  if (userTeam) return team.restPct != null ? team.restPct / 100 : team.autoGoalie === false ? 0 : 0.2;
+  const [g1, g2] = (team.lines?.G || []).map((id) => league.players[id]);
+  if (!g1 || !g2) return 0.2;
+  const gap = g1.ovr - g2.ovr;
+  return gap <= 1 ? 0.42 : gap <= 3 ? 0.33 : gap <= 6 ? 0.25 : 0.18;
+}
+
 function makeSide(league, team, opts) {
   const userTeam = team.id === opts.userTid;
   syncLines(league, team);
@@ -64,7 +76,7 @@ function makeSide(league, team, opts) {
   let goalie = lines.G[0];
   const backup = lines.G[1];
   // Starters play ~65 games; backups get the rest (never in the playoffs).
-  const startBackup = !opts.playoff && backup && (userTeam ? team.autoGoalie !== false && chance(0.2) : chance(0.21));
+  const startBackup = !opts.playoff && backup && chance(restShare(league, team, userTeam));
   if (startBackup || !goalie) goalie = backup || goalie;
   return {
     tid: team.id,

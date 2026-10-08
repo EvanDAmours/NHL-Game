@@ -4,7 +4,7 @@
 // 3:00 PM ET with a recap.
 import { isContending, assetValue, pickValue, evaluateTrade, executeTrade, tradingClosed } from "./trade.js";
 import { lineupIds } from "./lines.js";
-import { capSpace, counts, logTx, ensureMinimums, canSendDown } from "./roster.js";
+import { capSpace, counts, logTx, ensureMinimums, canSendDown, sendDown, releasePlayer } from "./roster.js";
 import { chance, pick, shuffle, rand, randFloat, randInt, weighted } from "./rng.js";
 import { MAX_ROSTER, MIN_FORWARDS, MIN_DEFENSE, MIN_GOALIES, isGoalie, isDefense } from "./constants.js";
 import { isRFA } from "./players.js";
@@ -291,10 +291,17 @@ export function fitRoster(league, t) {
     // Never send down someone needed to dress a full lineup (e.g. the emergency goalie).
     const healthy = counts(league, t, { healthyOnly: true });
     const spare = (p) => (groupOf(p) === "G" ? healthy.G > MIN_GOALIES : groupOf(p) === "D" ? healthy.D > MIN_DEFENSE : healthy.F > MIN_FORWARDS);
-    const extra = players(league, t.roster).filter((p) => !lineup.has(p.id) && p.injury <= 0 && canSendDown(p) && spare(p)).sort((a, b) => a.ovr - b.ovr)[0];
-    if (!extra) break;
-    t.roster = t.roster.filter((x) => x !== extra.id);
-    t.prospects.push(extra.id);
+    const bench = players(league, t.roster).filter((p) => !lineup.has(p.id) && p.injury < 7).sort((a, b) => a.ovr - b.ovr);
+    // Injured players don't count toward dressing a lineup, so they can always go down.
+    const down = bench.find((p) => canSendDown(p) && (p.injury > 0 || spare(p)));
+    if (down) {
+      sendDown(league, t, down.id);
+      continue;
+    }
+    // A veteran who can't be sent down is released, as the weekly roster pass would.
+    const cut = bench.find((p) => p.injury <= 0 && spare(p));
+    if (!cut) break;
+    releasePlayer(league, t, cut.id);
   }
 }
 
@@ -347,7 +354,7 @@ function doDeal(league, d) {
     b: d.seller.id,
     aGets: d.aGets,
     bGets: d.bGets,
-    star: { name: d.p.name, ovr: d.p.ovr },
+    star: { name: d.p.name, ovr: d.p.ovr, to: d.buyer.id },
     big: d.big,
     short: `${d.buyer.abbr} acquire ${d.p.name} from ${d.seller.abbr}`,
   });
@@ -361,8 +368,10 @@ function aiTradeFor(league, entry) {
 
 // ---------- Offers to the user ----------
 
+// Where we are on the calendar for "two weeks": game days in season, FA days after.
+const clock = (league) => (league.phase === "freeagency" ? 1000 + (league.fa?.day ?? 0) : league.day);
 function recentlyDeclined(league, tid, pid) {
-  return (league.declined || []).some((d) => d.tid === tid && d.pid === pid && d.year === league.year && Math.abs(league.day - d.day) < 14);
+  return (league.declined || []).some((d) => d.tid === tid && d.pid === pid && d.year === league.year && d.phase === league.phase && Math.abs(clock(league) - d.at) < (league.phase === "freeagency" ? 7 : 14));
 }
 
 function offerFor(league, pid, { unsolicited = false, expMin = null } = {}) {
@@ -385,9 +394,12 @@ function offerFor(league, pid, { unsolicited = false, expMin = null } = {}) {
       tid: buyer.id,
       ...offer,
       day: league.day,
-      expDay: league.day + 5,
+      // Each phase has its own clock: game days in season, FA days in free agency.
+      expDay: league.phase === "regular" ? league.day + 5 : null,
+      expFa: league.phase === "freeagency" ? (league.fa?.day ?? 0) + 7 : null,
       expMin,
       unsolicited,
+      phase: league.phase,
     };
     league.offers = league.offers || [];
     league.offers.push(o);
@@ -404,7 +416,10 @@ export function userOffers(league) {
 
 function offerValid(league, o) {
   if (tradingClosed(league)) return false;
-  if (league.day > o.expDay) return false;
+  if (o.expDay != null && league.day > o.expDay) return false;
+  if (o.expFa != null && (league.phase !== "freeagency" || (league.fa?.day ?? 0) > o.expFa)) return false;
+  // Off-season offers end when the phase changes (draft and re-signing have no clock).
+  if (o.expDay == null && o.expFa == null && o.phase && o.phase !== league.phase) return false;
   const dl = league.deadline;
   if (o.expMin != null && dl && dl.year === league.year && !dl.done && dl.minute > o.expMin) return false;
   const user = league.teams[league.userTid];
@@ -441,7 +456,7 @@ export function acceptOffer(league, offerId) {
 function noteTrade(league, aiTid, aGets, bGets) {
   const ai = league.teams[aiTid];
   const user = league.teams[league.userTid];
-  const star = [...aGets, ...bGets].map((s) => ({ s, ovr: Number((/, (\d+)/.exec(s) || [])[1] || 0) })).sort((a, b) => b.ovr - a.ovr)[0];
+  const star = [...aGets.map((s) => ({ s, to: ai.id })), ...bGets.map((s) => ({ s, to: user.id }))].map((x) => ({ ...x, ovr: Number((/, (\d+)/.exec(x.s) || [])[1] || 0) })).sort((a, b) => b.ovr - a.ovr)[0];
   wire(league, {
     kind: "trade",
     text: `${place(league, ai)} acquire ${aGets.join(", ")} from ${place(league, user)} for ${bGets.join(", ")}.`,
@@ -452,7 +467,7 @@ function noteTrade(league, aiTid, aGets, bGets) {
     bGets,
     mine: true,
     big: true,
-    star: star ? { name: star.s.replace(/ \(.*$/, ""), ovr: star.ovr } : null,
+    star: star ? { name: star.s.replace(/ \(.*$/, ""), ovr: star.ovr, to: star.to } : null,
     short: `${ai.abbr} and ${user.abbr} make a trade`,
   });
 }
@@ -472,7 +487,7 @@ export function declineOffer(league, offerId) {
   league.offers = (league.offers || []).filter((x) => x.id !== offerId);
   if (!o) return;
   // The same team won't come back with the same pitch for a couple of weeks.
-  league.declined = [...(league.declined || []).filter((d) => d.year === league.year && Math.abs(league.day - d.day) < 14), { tid: o.tid, pid: o.give[0], day: league.day, year: league.year }];
+  league.declined = [...(league.declined || []).filter((d) => d.year === league.year && d.phase === league.phase && Math.abs(clock(league) - d.at) < 14), { tid: o.tid, pid: o.give[0], at: clock(league), phase: league.phase, year: league.year }];
 }
 
 // ---------- Weekly market ----------
@@ -656,7 +671,7 @@ function finishDeadline(league) {
   dl.total = n;
   const recap = [`3:00 PM — the trade deadline has passed. ${n} trade${n === 1 ? "" : "s"} today.`];
   const star = trades.filter((f) => f.star).sort((a, b) => b.star.ovr - a.star.ovr)[0];
-  if (star) recap.push(`Biggest name moved: ${star.star.name} (${star.star.ovr}) to ${place(league, league.teams[star.a])}.`);
+  if (star) recap.push(`Biggest name moved: ${star.star.name} (${star.star.ovr}) to ${place(league, league.teams[star.star.to ?? star.a])}.`);
   const activity = {};
   for (const f of trades) for (const tid of [f.a, f.b]) activity[tid] = (activity[tid] || 0) + 1;
   const most = Object.entries(activity).sort((a, b) => b[1] - a[1])[0];
@@ -690,7 +705,7 @@ export function marketStance(league) {
         buyer: isContending(league, t),
         gap: cut ? t.rec.pts - cut.rec.pts : 0,
         cap: capSpace(league, t),
-        movesLeft: t.id === league.userTid ? null : Math.max(0, DEADLINE_DAY_LIMIT - deadlineMovesUsed(league, t)),
+        movesLeft: t.id === league.userTid ? null : Math.max(0, Math.min(DEADLINE_DAY_LIMIT - deadlineMovesUsed(league, t), SEASON_TRADE_LIMIT - tradesThisSeason(league, t))),
       });
     }
   }
