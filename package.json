@@ -1,0 +1,23 @@
+{
+  "name": "nhl-gm",
+  "version": "1.0.0",
+  "description": "Rink GM — a browser hockey general manager game built on EA SPORTS NHL 27 roster ratings.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node --test tests/*.test.js",
+    "validate:rosters": "node scripts/validate-rosters.mjs"
+  },
+  "dependencies": {
+    "lz-string": "1.5.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "4.3.4",
+    "vite": "5.4.11"
+  }
+}
