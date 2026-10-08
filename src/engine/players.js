@@ -1,5 +1,5 @@
 // Player creation, contracts, progression, aging and valuation.
-import { uid, gauss, clamp, rand, randInt, chance, pick } from "./rng.js";
+import { uid, gauss, clamp, rand, randInt, chance, pick, stream } from "./rng.js";
 import { generateAttributes, defaultArchetype, progressAttributes, computeOvr } from "./ratings.js";
 import { isGoalie, isDefense, capForYear, minSalaryForYear, maxSalaryForYear } from "./constants.js";
 import { randomName } from "./names.js";
@@ -18,6 +18,26 @@ export function estimatePotential(ovr, age) {
   else if (age <= 24) bump = 1.5;
   else if (age <= 25) bump = 0.7;
   return clamp(Math.round(ovr + bump + gauss(0, bump * 0.3)), ovr, 99);
+}
+
+// Development traits: how quickly a young player grows into (or past) his ceiling.
+export const DEV_TRAITS = {
+  superstar: { name: "Superstar", desc: "Develops very fast and often blows past his projected ceiling." },
+  star: { name: "Star", desc: "Develops faster than most and tends to beat his projection." },
+  normal: { name: "Normal", desc: "Develops on a typical curve." },
+  late: { name: "Late bloomer", desc: "Slow as a teenager, then catches up fast in his early twenties." },
+};
+const DEV_GROWTH = { superstar: 0.9, star: 0.45, normal: 0, late: 0 };
+const DEV_POT_DRIFT = { superstar: 0.55, star: 0.25, normal: 0, late: 0.1 };
+
+// A player's trait is fixed by who he is (his id), not by the main random stream.
+export function rollDev(id, pot = 80) {
+  const x = stream(`${id}|dev`).next();
+  const lift = clamp((pot - 82) / 100, -0.06, 0.1);
+  if (x < 0.04 + lift * 0.4) return "superstar";
+  if (x < 0.2 + lift) return "star";
+  if (x < 0.38 + lift) return "late";
+  return "normal";
 }
 
 export function createPlayer(opts, year) {
@@ -49,6 +69,7 @@ export function createPlayer(opts, year) {
     rookie: opts.rookie ?? age <= 21,
   };
   p.pot = opts.pot ? Math.max(opts.pot, p.ovr) : estimatePotential(p.ovr, age);
+  p.dev = opts.dev || rollDev(p.id, p.pot);
   return p;
 }
 
@@ -136,6 +157,9 @@ export function developPlayer(p, bonus = 0) {
   if (p.age <= 25) {
     const gap = p.pot - p.ovr;
     mean += gap > 0 ? Math.min(1.5, gap * 0.12) : gap * 0.3;
+    mean += DEV_GROWTH[p.dev] || 0;
+    // Late bloomers trade teenage growth for a surge at 22-25.
+    if (p.dev === "late") mean += age <= 21 ? -0.7 : 0.8;
   }
   // The air is thin at the top: elite ratings are hard to climb further.
   if (before >= 90) mean -= (before - 88) * 0.25;
@@ -146,7 +170,7 @@ export function developPlayer(p, bonus = 0) {
   // Attribute noise can drift OVR; pull it back toward the intended change.
   const drift = p.ovr - (before + delta);
   if (Math.abs(drift) >= 1) progressAttributes(p, -drift);
-  if (p.age <= 25) p.pot = clamp(Math.round(Math.max(p.ovr, p.pot + gauss(-0.3, 1.2))), p.ovr, 99);
+  if (p.age <= 25) p.pot = clamp(Math.round(Math.max(p.ovr, p.pot + gauss(-0.3 + (DEV_POT_DRIFT[p.dev] || 0), 1.2))), p.ovr, 99);
   else p.pot = p.ovr;
   p.peak = Math.max(p.peak || 0, p.ovr);
   return p.ovr - before;

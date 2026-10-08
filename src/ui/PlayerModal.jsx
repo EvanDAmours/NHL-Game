@@ -2,7 +2,9 @@ import React from "react";
 import { useGame, Modal, TeamBadge, Ovr, Bar, money, pct, signed } from "./common.jsx";
 import { SKATER_ATTRS, GOALIE_ATTRS } from "../engine/ratings.js";
 import { isGoalie, ARCHETYPES } from "../engine/constants.js";
-import { fullPosName, savePct, gaa, marketValue, isRFA } from "../engine/players.js";
+import { fullPosName, savePct, gaa, marketValue, isRFA, DEV_TRAITS } from "../engine/players.js";
+import ProspectProfile from "./ProspectProfile.jsx";
+import { DevChip } from "./scoutingBits.jsx";
 import { shownRatings } from "../engine/draft.js";
 import { sendDown, callUp, releasePlayer, canSendDown, hasRoomFor } from "../engine/roster.js";
 
@@ -26,6 +28,17 @@ export default function PlayerModal({ pid }) {
 
   const career = [...p.career].reverse();
 
+  if (p.tid === -2) {
+    return (
+      <Modal title={p.name} onClose={closeModal} head={<span className="pill">{league.draftClassYear} draft prospect</span>}>
+        <ProspectProfile p={p} />
+      </Modal>
+    );
+  }
+  // Development traits matter while a player is still growing. Other teams' prospects
+  // show what your scouts found out (if anything).
+  const devShown = p.age <= 25 && p.dev ? (hidden ? p.scout.dev || null : p.dev) : undefined;
+
   return (
     <Modal
       title={p.name}
@@ -43,6 +56,7 @@ export default function PlayerModal({ pid }) {
             <span className="k">Type</span><span>{ARCHETYPES[p.type]?.name}</span>
             <span className="k">Age</span><span>{p.age}{p.nat ? ` · ${p.nat}` : ""}</span>
             <span className="k">Potential</span><span>{r.pot}{hidden && !r.exact ? " (scout estimate)" : ""}</span>
+            {devShown !== undefined && (<><span className="k">Development</span><span>{devShown ? <span title={DEV_TRAITS[devShown].desc}><DevChip dev={devShown} /></span> : <DevChip dev={null} />}</span></>)}
             <span className="k">Team</span><span>{team ? <span className="link" onClick={() => openTeam(team.id)}>{team.city} {team.name}</span> : p.tid === -2 ? `${league.draftClassYear} draft class` : "Free agent"}{inMinors ? " (minors)" : ""}</span>
             <span className="k">Contract</span>
             <span>{p.signed === false ? "Unsigned draft pick" : p.yrs > 0 ? `${money(p.cap)} × ${p.yrs} yr${p.yrs > 1 ? "s" : ""} (through ${league.year + p.yrs - 1}-${String(league.year + p.yrs).slice(2)})` : "None"} {p.tid >= 0 && p.yrs <= 1 && p.signed !== false ? <span className="pill">{isRFA(p) ? "RFA" : "UFA"} next summer</span> : null}</span>

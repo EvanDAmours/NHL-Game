@@ -34,7 +34,8 @@ npm run build:artifact   # one self-contained page: dist/rink-gm.html
 - **Contracts that look like the NHL's**: market value follows a 2026-27 pay scale (about $16M for a 99, $12M for a 92, $8.6M for an 88, $3-7M for middle-six forwards and second-pair D, near the minimum for depth) and grows with the cap. Veterans keep most of their value into their mid-30s on shorter deals. Free agents hold close to their ask instead of dropping to bargain prices, the best ones go in the first days to teams with room, and every AI club reaches the cap floor (or pays the shortfall to its players, as the CBA requires).
 - **Goalie workload**: choose how often your starter rests, from never to 50% (a true 1A/1B tandem), and see the expected starts. AI teams with two close goalies split the net too.
 - **Front office**: the salary cap ($104M in 2026-27, $113.5M in 2027-28, then growth), a 23-man roster with minors call-ups and send-downs, buyouts with dead cap, re-signing with RFA/UFA and player mood, a 30-day free agency with AI bidding, and trades with an AI that values players, prospects and picks differently when contending or rebuilding.
-- **Draft**: an NHL two-draw lottery, 4 rounds, 128 picks, generated prospect classes, and a scouting budget that narrows the uncertainty on prospect ratings. The draft screen shows who's on the clock, the next picks, a best-available board with "Now" and "Ceiling" ranges and a plain-language ceiling (Franchise, Top line, Top six...), and the full order round by round.
+- **Scouting**: hire a **major scout** and a **minor scout**, each covering a different position (centers, wingers, defensemen or goalies). Every prospect has a bio (junior or European team, size, season stats) and an NHL Central Scouting rank, and the Big Board always stays in Central Scouting's order, so scouting never moves anyone. Scouting points come in every week of the season. Your minor scout gives you a general idea of every prospect at his position; your major scout's reports are sharper, and a full workup reveals exact ratings and the player's development trait (Superstar, Star, Normal or Late bloomer). Reports include tool grades, strengths and concerns, and an NHL comparable. Star prospects to build your own ranking.
+- **Scouting Combine and draft**: after the Final, the top 100 prospects test at the Combine, Central Scouting publishes final rankings (risers and fallers), and you get interview slots and a few more scouting points. Then an NHL two-draw lottery and 4 rounds (128 picks), with analysts' instant grades for every pick and every team's class.
 - **Long-term play**: aging, development and retirement, career stats, league history and transaction logs. Saves are compressed in localStorage, and you can export or import league files.
 
 ## About the ratings data
@@ -59,10 +60,10 @@ npm run build:artifact   # one self-contained page: dist/rink-gm.html
 
 ```
 src/engine/   game logic (pure JS, no React) — ratings, players, sim, schedule, lines,
-              standings, playoffs, draft, roster/cap, offseason, trade, trade market
+              standings, playoffs, draft, scouting, roster/cap, offseason, trade, trade market
               (block, AI deals, deadline day), awards,
               importer, league orchestration + save/load
-src/ui/       React screens (dashboard, roster, lines, live game, trade, FA, draft…)
+src/ui/       React screens (dashboard, roster, lines, live game, trade, FA, draft & scouting…)
 src/data/     NHL 27 roster file
 tests/        node:test engine tests
 scripts/      roster validator

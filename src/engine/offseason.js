@@ -2,7 +2,7 @@
 // rollover into a new season (aging, development, retirements, new schedule).
 import { clamp, chance, shuffle, randInt, gauss } from "./rng.js";
 import { contractAsk, developPlayer, retirementChance, blankStats, marketValue, generatePlayer, isRFA, round2 } from "./players.js";
-import { capForYear, capFloorForYear, minSalaryForYear, maxSalaryForYear, DIFFICULTY, FA_DAYS, SCOUT_POINTS_PER_SEASON, isGoalie, isDefense, isForward, MAX_ROSTER } from "./constants.js";
+import { capForYear, capFloorForYear, minSalaryForYear, maxSalaryForYear, DIFFICULTY, FA_DAYS, SCOUT_POINTS_START, isGoalie, isDefense, isForward, MAX_ROSTER } from "./constants.js";
 import { payroll, capSpace, counts, signPlayer, releasePlayer, callUp, sendDown, canSendDown, logTx, ensureMinimums, hasRoomFor } from "./roster.js";
 import { teamRatings, autoLines, syncLines } from "./lines.js";
 import { generateSchedule } from "./schedule.js";
@@ -294,7 +294,8 @@ export function startNewSeason(league) {
 
   for (const t of league.teams) {
     t.rec = blankRecord();
-    t.scoutPts = SCOUT_POINTS_PER_SEASON;
+    t.scoutPts = SCOUT_POINTS_START;
+    t.scoutWeekPaid = -1;
     t.playoffResult = null;
     // Unsigned draft rights lapse at 23.
     for (const id of [...t.prospects]) {
@@ -328,7 +329,7 @@ export function startNewSeason(league) {
   league.fa = null;
   generateDraftClass(league, league.year + 1);
   createDraftPicks(league, league.year + 3);
-  league.inbox.push({ year: league.year, day: 0, text: `Welcome to the ${league.year}-${String(league.year + 1).slice(2)} season. Set your lines and start the season when ready.` });
+  league.inbox.push({ year: league.year, day: 0, text: `Welcome to the ${league.year}-${String(league.year + 1).slice(2)} season. Set your lines and start the season when ready. The ${league.year + 1} draft class is out: Central Scouting's midterm rankings are on the Big Board, and your scouts bank a point every week of the season. The preseason is your last chance to change scouts until after the draft.` });
 }
 
 function compactStats(pos, st) {

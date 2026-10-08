@@ -5,17 +5,18 @@ import LZString from "lz-string";
 import { TEAMS } from "./teams.js";
 import { seed as seedRng, randInt, pick, chance, gauss, clamp } from "./rng.js";
 import { createPlayer, generatePlayer, marketValue } from "./players.js";
-import { FIRST_SEASON, SCOUT_POINTS_PER_SEASON, SAVE_KEY, SAVE_VERSION, MAX_ROSTER, DRAFT_ROUNDS, isGoalie, isDefense, minSalaryForYear } from "./constants.js";
-import { autoLines, linesFromNames, lineupIds, coachLines } from "./lines.js";
+import { FIRST_SEASON, SCOUT_POINTS_START, SAVE_KEY, SAVE_VERSION, MAX_ROSTER, DRAFT_ROUNDS, isGoalie, isDefense, minSalaryForYear } from "./constants.js";
+import { autoLines, linesFromNames, coachLines } from "./lines.js";
 import { generateSchedule, lastDay } from "./schedule.js";
 import { createGame, simToEnd, applyResult, blankRecord } from "./sim.js";
 import { generateDraftClass, createDraftPicks, startDraft, finishDraft, draftDone } from "./draft.js";
 import { startPlayoffs, simPlayoffDay } from "./playoffs.js";
 import { computeAwards, connSmythe } from "./awards.js";
-import { ensureMinimums, counts, sendDown, canSendDown, logTx, IR_GAMES } from "./roster.js";
+import { ensureMinimums, counts, sendDown, canSendDown, logTx, IR_GAMES, healInjuries } from "./roster.js";
 import { startResign, endResign, startNewSeason, aiManageRoster, ratingLevel } from "./offseason.js";
 import { marketWeek, deadlinePending, skipDeadline, refreshBlock, fitRoster, seedUserRequests, DEADLINE_END } from "./market.js";
 import { tradingClosed } from "./trade.js";
+import { defaultScouts, refreshScoutPool, scoutWeek, runCombine, migrateScouting } from "./scouting.js";
 
 export function createLeague({ userAbbr = "TOR", mode = "real", difficulty = "normal", seed } = {}) {
   if (seed != null) seedRng(seed);
@@ -36,7 +37,7 @@ export function createLeague({ userAbbr = "TOR", mode = "real", difficulty = "no
       lines: null,
       rec: blankRecord(),
       deadCap: [],
-      scoutPts: SCOUT_POINTS_PER_SEASON,
+      scoutPts: SCOUT_POINTS_START,
       autoGoalie: true,
       playoffResult: null,
     })),
@@ -56,6 +57,8 @@ export function createLeague({ userAbbr = "TOR", mode = "real", difficulty = "no
   };
   const user = league.teams.find((t) => t.abbr === userAbbr) || league.teams[0];
   league.userTid = user.id;
+  user.scouts = defaultScouts(league);
+  refreshScoutPool(league);
 
   if (mode === "real") loadRealRosters(league);
   else generateRandomRosters(league);
@@ -76,7 +79,7 @@ export function createLeague({ userAbbr = "TOR", mode = "real", difficulty = "no
   league.deadlineDay = Math.floor(lastDay(league.schedule) * 0.78);
   refreshBlock(league);
   seedUserRequests(league);
-  league.inbox.push({ year, day: 0, text: `Welcome, GM of the ${user.city} ${user.name}! Rosters and ratings are from EA SPORTS NHL 27, and every team starts with its real opening-week line combinations. Check the Lines tab, then start the season.` });
+  league.inbox.push({ year, day: 0, text: `Welcome, GM of the ${user.city} ${user.name}! Rosters and ratings are from EA SPORTS NHL 27, and every team starts with its real opening-week line combinations. Check the Lines tab, then start the season. Your scouting staff is under Draft & Scouting.` });
   return league;
 }
 
@@ -192,18 +195,6 @@ export function startRegularSeason(league) {
   logTx(league, `${league.year}-${String(league.year + 1).slice(2)} regular season begins`);
 }
 
-function healDay(league, playedTids) {
-  for (const id in league.players) {
-    const p = league.players[id];
-    if (p.injury > 0 && playedTids.has(p.tid)) {
-      p.injury--;
-      // Back from injury: if he'd lost his spot, he's considered for the lineup again.
-      const t = p.injury === 0 && league.teams[p.tid];
-      if (t && t.lines && !lineupIds(t.lines).includes(p.id)) (t.linesNew ||= []).push(p.id);
-    }
-  }
-}
-
 export function playScheduledGame(league, g, state) {
   const result = applyResult(league, state, { playoff: false });
   const mine = g.h === league.userTid || g.a === league.userTid;
@@ -238,7 +229,8 @@ export function simDay(league, { holdUserGame = false } = {}) {
 
 export function finishDay(league, played) {
   const ids = played || new Set(gamesOnDay(league, league.day).flatMap((g) => [g.h, g.a]));
-  healDay(league, ids);
+  healInjuries(league, ids);
+  scoutWeek(league);
   // AI rosters adjust to injuries periodically.
   if (league.day % 7 === 0) {
     for (const t of league.teams) {
@@ -294,6 +286,7 @@ export function finishPlayoffs(league) {
   logTx(league, `The ${league.teams[champ].city} ${league.teams[champ].name} win the Stanley Cup!`);
   startDraft(league);
   league.phase = "draft";
+  runCombine(league);
   // Trading reopens after the Final: the block fills up again for the off-season.
   league.offers = [];
   refreshBlock(league);
@@ -303,6 +296,8 @@ export function completeDraft(league) {
   if (!draftDone(league)) return false;
   finishDraft(league);
   startResign(league);
+  // A new crop of scouts looking for work over the summer.
+  refreshScoutPool(league);
   return true;
 }
 
@@ -362,6 +357,8 @@ function migrateLeague(l) {
     l.block = [];
     if (!tradingClosed(l)) refreshBlock(l);
   }
+  // Scouting staff, development traits, prospect bios and Central Scouting ranks.
+  migrateScouting(l);
   return l;
 }
 

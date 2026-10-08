@@ -2,7 +2,7 @@
 import { capForYear, capFloorForYear, MAX_ROSTER, MIN_FORWARDS, MIN_DEFENSE, MIN_GOALIES, isForward, isDefense, isGoalie, ELC_SALARY, minSalaryForYear } from "./constants.js";
 import { generatePlayer, marketValue, round2 } from "./players.js";
 import { randInt, pick } from "./rng.js";
-import { syncLines } from "./lines.js";
+import { syncLines, lineupIds } from "./lines.js";
 
 export const IR_GAMES = 7; // players out this long don't count against the 23-man limit
 
@@ -20,6 +20,19 @@ export function payroll(league, team) {
 
 export function capSpace(league, team) {
   return round2(capForYear(capYear(league)) - payroll(league, team));
+}
+
+// One game's worth of recovery for everyone on the given teams. A player back from injury
+// who'd lost his spot is considered for the lineup again.
+export function healInjuries(league, tids) {
+  for (const id in league.players) {
+    const p = league.players[id];
+    if (p.injury > 0 && tids.has(p.tid)) {
+      p.injury--;
+      const t = p.injury === 0 && league.teams[p.tid];
+      if (t && t.lines && !lineupIds(t.lines).includes(p.id)) (t.linesNew ||= []).push(p.id);
+    }
+  }
 }
 
 export function counts(league, team, { healthyOnly = false } = {}) {

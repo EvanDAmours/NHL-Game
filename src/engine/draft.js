@@ -1,9 +1,12 @@
-// Entry draft: prospect classes, scouting, the two-draw lottery, and AI picks.
+// Entry draft: prospect classes, the two-draw lottery, and AI picks. Scouting lives in
+// scouting.js.
 import { gauss, clamp, rand, randInt, chance, weighted } from "./rng.js";
 import { generatePlayer } from "./players.js";
 import { DRAFT_ROUNDS, isGoalie, isDefense, isForward, MAX_PROSPECTS } from "./constants.js";
 import { compareTeams } from "./standings.js";
 import { defaultArchetype } from "./ratings.js";
+import { rollDev } from "./players.js";
+import { rankClass, csRank, csScore, pickGrade, openDraftFloor } from "./scouting.js";
 
 const CLASS_SIZE = 170; // 4 rounds x 32 picks, plus some left undrafted
 const POS_MIX = [["C", 25], ["LW", 17], ["RW", 17], ["LD", 14], ["RD", 14], ["G", 8]];
@@ -29,47 +32,34 @@ export function generateDraftClass(league, draftYear) {
     p.signed = false;
     p.rookie = true;
     p.consensus = gauss(0, 3);
-    p.scout = { lvl: 0, ...estimate(p, 4, 5) };
+    p.dev = rollDev(p.id, p.pot);
+    // The public, consensus read used wherever a prospect you never scouted shows up later.
+    p.scout = { lvl: 0, base: estimate(p, 4, 5) };
     league.players[p.id] = p;
     ids.push(p.id);
   }
   league.draftClass = ids;
   league.draftClassYear = draftYear;
+  rankClass(league, ids);
   return ids;
 }
 
-// A scout's read on a prospect: noisy, but never wildly off, and the ceiling he
-// reports is never below how good the player is today.
+// A noisy read on a prospect: never wildly off, and the ceiling it reports is never
+// below how good the player is today.
 function estimate(p, sdOvr, sdPot) {
   const eOvr = Math.round(p.ovr + clamp(gauss(0, sdOvr), -1.8 * sdOvr, 1.8 * sdOvr));
   const ePot = Math.max(eOvr + 1, Math.round(p.pot + clamp(gauss(0, sdPot), -1.8 * sdPot, 1.8 * sdPot)));
   return { eOvr, ePot };
 }
 
-export function scoutCost(p) {
-  return p.scout.lvl === 0 ? 1 : p.scout.lvl === 1 ? 2 : 0;
-}
-
-export function scoutProspect(league, pid) {
-  const p = league.players[pid];
-  const team = league.teams[league.userTid];
-  const cost = scoutCost(p);
-  if (!cost || team.scoutPts < cost) return false;
-  team.scoutPts -= cost;
-  p.scout.lvl++;
-  if (p.scout.lvl === 1) {
-    Object.assign(p.scout, estimate(p, 1.8, 2.2));
-  } else {
-    p.scout.eOvr = p.ovr;
-    p.scout.ePot = p.pot;
-  }
-  return true;
-}
-
-// Ratings the user sees for an unsigned/undrafted prospect.
+// Ratings the user sees for a prospect someone else owns (or hasn't drafted yet): your
+// latest scouting report if there is one, otherwise the consensus read.
 export function shownRatings(p) {
-  if (!p.scout) return { ovr: p.ovr, pot: p.pot, exact: true };
-  return { ovr: p.scout.eOvr, pot: p.scout.ePot, exact: p.scout.lvl >= 2 };
+  const s = p.scout;
+  if (!s) return { ovr: p.ovr, pot: p.pot, exact: true };
+  if (s.lvl > 0 && s.eOvr != null) return { ovr: s.eOvr, pot: s.ePot, exact: !!s.exact };
+  const b = s.base || s;
+  return { ovr: b.eOvr ?? p.ovr, pot: b.ePot ?? p.pot, exact: false };
 }
 
 export function createDraftPicks(league, year) {
@@ -148,15 +138,19 @@ function teamNeeds(league, tid) {
   return { G: g < 4 ? 1.04 : 0.93, D: d < 12 ? 1.03 : 1, F: f < 20 ? 1.02 : 1 };
 }
 
+// AI teams blend their own scouts' (noisy) read with Central Scouting's rankings, so they
+// mostly follow the board and the sleepers your scouts find can still be there.
+const DEV_EYE = { superstar: 1.2, star: 0.6, late: -0.3 };
 export function aiChoose(league, tid) {
-  const avail = league.draftClass.filter((id) => league.players[id].tid === -2);
+  const avail = league.draftClass.filter((id) => league.players[id]?.tid === -2);
   const need = teamNeeds(league, tid);
   let best = null;
   let bestScore = -Infinity;
   for (const id of avail) {
     const p = league.players[id];
     const grp = isGoalie(p.pos) ? "G" : isDefense(p.pos) ? "D" : "F";
-    const score = ((p.pot + p.consensus) * 0.78 + p.ovr * 0.22 + gauss(0, 1.2)) * need[grp];
+    const own = (p.pot + (p.consensus || 0)) * 0.78 + p.ovr * 0.22 + (DEV_EYE[p.dev] || 0);
+    const score = (own * 0.5 + csScore(p) * 0.5 + gauss(0, 1.2)) * need[grp];
     if (score > bestScore) { bestScore = score; best = id; }
   }
   return best;
@@ -167,7 +161,10 @@ export function makePick(league, pid) {
   const slot = d.slots[d.idx];
   const p = league.players[pid];
   if (!slot || !p || p.tid !== -2) return false;
+  openDraftFloor(league);
   slot.pid = pid;
+  slot.csr = csRank(p);
+  slot.grade = pickGrade(slot.overall, slot.csr);
   p.tid = slot.owner;
   p.draft = { year: d.year, round: slot.round, pick: slot.overall, tid: slot.owner };
   p.yrs = 0;
@@ -190,6 +187,7 @@ export function currentSlot(league) {
 
 // AI picks until it's the user's turn (or the draft ends).
 export function simDraftToUser(league, { all = false } = {}) {
+  openDraftFloor(league);
   while (!draftDone(league)) {
     const slot = currentSlot(league);
     if (!all && slot.owner === league.userTid) return;
@@ -219,25 +217,6 @@ export function releaseProspect(league, pid) {
   const t = league.teams[p.tid];
   if (t) t.prospects = t.prospects.filter((x) => x !== pid);
   delete league.players[pid];
-}
-
-// How a prospect's ceiling reads to a scout.
-export function potentialTier(pot) {
-  if (pot >= 90) return "Franchise";
-  if (pot >= 86) return "Top line";
-  if (pot >= 82) return "Top six";
-  if (pot >= 78) return "Middle six";
-  if (pot >= 74) return "Depth";
-  return "Long shot";
-}
-
-// The range the user's scouts believe a rating falls in.
-export function ratingRange(p, which) {
-  const r = shownRatings(p);
-  const v = which === "pot" ? r.pot : r.ovr;
-  if (r.exact) return [v, v];
-  const spread = p.scout.lvl ? 2 : which === "pot" ? 5 : 4;
-  return [Math.max(40, v - spread), Math.min(99, v + spread)];
 }
 
 export function randomRoundSeed() {

@@ -58,3 +58,14 @@ export function randomName(nation = randomNation()) {
   const pool = POOLS[nation] || POOLS.CAN;
   return { name: `${pick(pool.first)} ${pick(pool.last)}`, nat: nation };
 }
+
+// Same as randomName, drawing from a keyed stream (see rng.stream) instead of the main one.
+export function randomNameWith(r, nation) {
+  let n = nation;
+  if (!n) {
+    let x = r.next() * TOTAL_W;
+    n = NATIONS.find((k) => (x -= POOLS[k].w) <= 0) || "CAN";
+  }
+  const pool = POOLS[n] || POOLS.CAN;
+  return { name: `${r.pick(pool.first)} ${r.pick(pool.last)}`, nat: n };
+}

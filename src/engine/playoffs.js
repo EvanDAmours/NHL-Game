@@ -1,6 +1,7 @@
 // Stanley Cup Playoffs: 16 teams, four best-of-seven rounds, fixed bracket.
 import { playoffPicture, compareTeams } from "./standings.js";
 import { createGame, simToEnd, applyResult } from "./sim.js";
+import { healInjuries } from "./roster.js";
 
 const HOME_PATTERN = [true, true, false, false, true, false, true]; // 2-2-1-1-1 from the top seed's view
 
@@ -85,6 +86,15 @@ export function simPlayoffDay(league, { skipSeries = null } = {}) {
   const po = league.playoffs;
   if (!po || po.champion != null) return false;
   const round = po.rounds[po.round];
+  // Everyone still alive heals a game's worth: teams playing today (the user's live game
+  // included) and teams resting after winning their series early.
+  const alive = new Set();
+  for (const s of round) {
+    if (s.winner == null || s === skipSeries) {
+      alive.add(s.top);
+      alive.add(s.bot);
+    } else alive.add(s.winner);
+  }
   for (const s of round) {
     if (s.winner != null || s === skipSeries) continue;
     const g = nextGame(league, s);
@@ -93,6 +103,7 @@ export function simPlayoffDay(league, { skipSeries = null } = {}) {
     const result = applyResult(league, state, { playoff: true });
     recordSeriesGame(league, s, state, result);
   }
+  healInjuries(league, alive);
   advanceRoundIfDone(league);
   return true;
 }

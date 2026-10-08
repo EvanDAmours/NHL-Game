@@ -16,7 +16,8 @@ import { evaluateTrade, executeTrade, tradingClosed, isContending } from "../src
 import { toggleUserBlock, onBlock, deadlinePending, startDeadline, deadlineTick, userOffers, acceptOffer, DEADLINE_START, DEADLINE_END } from "../src/engine/market.js";
 import { conferenceTable } from "../src/engine/standings.js";
 import { parseRatingsCsv, matchRows, applyRatings } from "../src/engine/importer.js";
-import { MAX_ROSTER, capFloorForYear } from "../src/engine/constants.js";
+import { MAX_ROSTER, capFloorForYear, SCOUT_POINTS_START, SCOUT_POINTS_COMBINE, COMBINE_INVITES, COMBINE_INTERVIEWS } from "../src/engine/constants.js";
+import { classPool, csRank, scoutGroup, prospectRead, scoutProspect, scoutCost, hireScout, staffWindowOpen, atCombine, interviewProspect, pickGrade } from "../src/engine/scouting.js";
 import rosterFile from "../src/data/nhl27-rosters.json" with { type: "json" };
 
 test("roster file: 32 teams, valid entries, no duplicates", () => {
@@ -324,4 +325,101 @@ test("contracts look like the NHL's, and the goalie rest setting is honoured", (
   const starter = lg.players[user.lines.G[0]];
   const backup = lg.players[user.lines.G[1]];
   assert.ok(backup.stats.gp >= 25 && starter.stats.gp <= 57, `starts ${starter.stats.gp}/${backup.stats.gp}`);
+});
+
+test("injuries heal in the playoffs; scouting: stable board, two scouts, the Combine, pick grades", () => {
+  const lg = L.createLeague({ userAbbr: "EDM", seed: 21 });
+  const user = lg.teams[lg.userTid];
+  // A major and a minor scout on different positions; you can't double up.
+  assert.ok(user.scouts.major && user.scouts.minor && user.scouts.major.group !== user.scouts.minor.group);
+  assert.equal(user.scoutPts, SCOUT_POINTS_START);
+  const dup = lg.scoutPool.find((s) => s.group === user.scouts.major.group);
+  assert.equal(hireScout(lg, dup.id, "minor").ok, false);
+  const gScout = lg.scoutPool.find((s) => s.group === "G");
+  assert.ok(hireScout(lg, gScout.id, "minor").ok);
+  assert.equal(user.scouts.minor.group, "G");
+
+  // The board is in Central Scouting order and scouting never moves anyone.
+  const order = () => classPool(lg).sort((a, b) => csRank(a) - csRank(b)).map((p) => p.id);
+  const before = order();
+  user.scoutPts = 50;
+  const majorP = classPool(lg).find((p) => scoutGroup(p.pos) === user.scouts.major.group);
+  const minorP = classPool(lg).find((p) => scoutGroup(p.pos) === "G");
+  const officeP = classPool(lg).find((p) => !["G", user.scouts.major.group].includes(scoutGroup(p.pos)));
+  assert.ok(prospectRead(lg, majorP).general && prospectRead(lg, minorP).general, "general idea at covered positions");
+  assert.ok(!prospectRead(lg, officeP).general && prospectRead(lg, officeP).ovr === "??", "nothing at uncovered positions");
+  for (const p of [majorP, minorP, officeP]) {
+    assert.ok(scoutProspect(lg, p.id).ok);
+    assert.ok(scoutProspect(lg, p.id).ok);
+    assert.equal(scoutCost(p), 0);
+  }
+  assert.deepEqual(order(), before, "board order unchanged by scouting");
+  assert.equal(user.scoutPts, 50 - 9);
+  // Only the major scout gets exact numbers and the development trait.
+  assert.deepEqual([majorP.scout.eOvr, majorP.scout.ePot, majorP.scout.dev], [majorP.ovr, majorP.pot, majorP.dev]);
+  assert.ok(!minorP.scout.exact && !officeP.scout.exact && officeP.scout.dev == null);
+  assert.ok(majorP.bio.team && majorP.bio.ht && majorP.cs.mid >= 1 && majorP.scout.skills && majorP.scout.notes.strengths.length);
+
+  // Staff is locked during the season; points come in weekly.
+  L.startRegularSeason(lg);
+  assert.ok(!staffWindowOpen(lg));
+  assert.equal(hireScout(lg, lg.scoutPool[0].id, "major").ok, false);
+  user.scoutPts = 0;
+  L.simDays(lg, 30);
+  assert.ok(user.scoutPts >= 4 && user.scoutPts <= 6, `weekly points ${user.scoutPts}`);
+
+  // A player hurt for two games misses two playoff games, then he's back.
+  L.simRestOfSeason(lg);
+  L.endRegularSeason(lg);
+  const s0 = lg.playoffs.rounds[0][0];
+  const hurt = lg.teams[s0.top].roster.map((id) => lg.players[id]).find((p) => p.injury === 0 && p.pos !== "G");
+  hurt.injury = 2;
+  simPlayoffDay(lg);
+  simPlayoffDay(lg);
+  assert.equal(hurt.injury, 0, "playoff injuries heal");
+
+  // The Combine: tests for the top prospects, final rankings, interviews and extra points.
+  while (lg.playoffs.champion == null) simPlayoffDay(lg);
+  const pts = user.scoutPts;
+  L.finishPlayoffs(lg);
+  assert.ok(atCombine(lg));
+  const guru = user.scouts.major?.trait === "combine" || user.scouts.minor?.trait === "combine";
+  assert.equal(user.scoutPts, pts + SCOUT_POINTS_COMBINE + (guru ? 3 : 0));
+  const invited = classPool(lg).filter((p) => p.combine);
+  assert.equal(invited.length, COMBINE_INVITES);
+  assert.ok(classPool(lg).every((p) => p.cs.final >= 1));
+  assert.ok(interviewProspect(lg, invited[0].id).ok);
+  assert.ok(invited[0].scout.intv.grade);
+  assert.equal(lg.draft.interviewsLeft, COMBINE_INTERVIEWS - 1);
+  assert.ok(lg.draft.buzz.length > 0);
+
+  // The draft: AI teams mostly follow the board, and every pick gets an analyst grade.
+  simDraftToUser(lg, { all: true });
+  assert.ok(!atCombine(lg) && draftDone(lg));
+  assert.ok(lg.draft.slots.every((s) => s.pid && s.grade && s.csr >= 1));
+  const r1 = lg.draft.slots.filter((s) => s.round === 1).map((s) => s.csr);
+  assert.ok(r1.reduce((a, b) => a + b, 0) / r1.length < 24 && Math.max(...r1) <= 80, `round 1 CS ranks ${r1}`);
+  assert.equal(pickGrade(1, 1), "A");
+  assert.equal(pickGrade(12, 12), "B+");
+  assert.equal(pickGrade(40, 10), "A+");
+  assert.equal(pickGrade(5, 40), "D");
+  assert.ok(staffWindowOpen(lg), "staff window opens after the draft");
+  const back = L.deserializeLeague(L.serializeLeague(lg));
+  assert.equal(back.teams[back.userTid].scouts.minor.group, "G");
+
+  // Old saves pick up scouts, development traits, bios and Central Scouting ranks.
+  const old = JSON.parse(JSON.stringify(L.createLeague({ userAbbr: "MTL", seed: 3 })));
+  delete old.teams[old.userTid].scouts;
+  delete old.scoutPool;
+  for (const id of old.draftClass) {
+    const p = old.players[id];
+    delete p.bio;
+    delete p.cs;
+    delete p.dev;
+    p.scout = { lvl: 1, eOvr: p.ovr + 1, ePot: p.pot - 1 };
+  }
+  const mig = L.restoreLeague(old);
+  assert.ok(mig.teams[mig.userTid].scouts.major && mig.scoutPool.length);
+  const mp = mig.players[mig.draftClass[0]];
+  assert.ok(mp.bio && mp.cs.mid >= 1 && mp.dev && mp.scout.base && mp.scout.lvl === 1 && !mp.scout.exact);
 });

@@ -26,6 +26,7 @@ import { dayToDate } from "./engine/schedule.js";
 import { capSpace, rosterIssues } from "./engine/roster.js";
 import { simPlayoffDay, userSeries, nextGame } from "./engine/playoffs.js";
 import { simDraftToUser, draftDone, currentSlot } from "./engine/draft.js";
+import { atCombine, openDraftFloor } from "./engine/scouting.js";
 import { simFADay } from "./engine/offseason.js";
 import { cloudSave } from "./platform.js";
 import ConfirmModal from "./ui/ConfirmModal.jsx";
@@ -343,6 +344,11 @@ export default function App({ resume = false }) {
       setTab("draft");
       commit();
     },
+    startDraft: () => {
+      openDraftFloor(league);
+      setTab("draft");
+      commit();
+    },
     simToMyPick: () => {
       simDraftToUser(league);
       commit();
@@ -393,7 +399,7 @@ export default function App({ resume = false }) {
     if (league.phase === "regular") return `${season} · ${dayToDate(league.year, league.day)}`;
     if (league.phase === "playoffs") return `${season} · Playoffs`;
     if (league.phase === "freeagency") return `${league.year + 1} Free Agency · Day ${league.fa?.day ?? 0}/${FA_DAYS}`;
-    if (league.phase === "draft") return `${league.year + 1} Entry Draft`;
+    if (league.phase === "draft") return atCombine(league) ? `${league.year + 1} Scouting Combine` : `${league.year + 1} Entry Draft`;
     if (league.phase === "resign") return `${league.year + 1} Off-season · Re-sign`;
     return `${season} · ${PHASES[league.phase]}`;
   })();
@@ -426,7 +432,8 @@ export default function App({ resume = false }) {
     }
   }
   if (league.phase === "draft") {
-    if (draftDone(league)) actions.push(<button key="rs" className="primary" onClick={act.toResign}>Continue to Re-signing →</button>);
+    if (atCombine(league)) actions.push(<button key="sd" className="primary" onClick={act.startDraft}>Start the Draft →</button>);
+    else if (draftDone(league)) actions.push(<button key="rs" className="primary" onClick={act.toResign}>Continue to Re-signing →</button>);
     else {
       const slot = currentSlot(league);
       if (slot.owner !== user.id) actions.push(<button key="mp" className="primary" onClick={act.simToMyPick}>Sim to My Pick</button>);

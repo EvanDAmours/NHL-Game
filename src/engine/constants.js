@@ -26,7 +26,11 @@ export const MAX_PROSPECTS = 20;
 export const GAMES_PER_TEAM = 82;
 export const DRAFT_ROUNDS = 4;
 export const FA_DAYS = 30;
-export const SCOUT_POINTS_PER_SEASON = 24;
+export const SCOUT_POINTS_START = 6; // in the bank when a new draft class is announced
+export const SCOUT_POINTS_WEEKLY = 1; // earned each week of the regular season
+export const SCOUT_POINTS_COMBINE = 4; // extra budget at the Scouting Combine
+export const COMBINE_INVITES = 100;
+export const COMBINE_INTERVIEWS = 3;
 
 export const POSITIONS = ["C", "LW", "RW", "LD", "RD", "G"];
 export const FORWARD_POS = ["C", "LW", "RW"];
