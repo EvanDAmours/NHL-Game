@@ -44,15 +44,16 @@ export function autoLines(league, team) {
 
   const G = [goalies[0]?.id || null, goalies[1]?.id || null];
   team.lines = { F, D, G, ...specialTeams(dressedSkaters(league, F, D)) };
+  team.linesNew = [];
   return team.lines;
 }
 
 // Special teams are drawn only from the 18 skaters dressed in the lineup.
-function dressedSkaters(league, F, D) {
+export function dressedSkaters(league, F, D) {
   return [...F.flat(), ...D.flat()].filter(Boolean).map((id) => league.players[id]).filter(Boolean);
 }
 
-function specialTeams(avail) {
+export function specialTeams(avail) {
   const fwds = avail.filter((p) => isForward(p.pos)).map((p) => ({ p, c: composites(p) }));
   const dmen = avail.filter((p) => isDefense(p.pos)).map((p) => ({ p, c: composites(p) }));
   const off = (x) => x.c.off * 0.7 + x.p.ovr * 0.3;
@@ -68,40 +69,188 @@ function specialTeams(avail) {
   };
 }
 
-// Keep user-set lines but replace anyone injured/gone with the best substitute.
-export function repairLines(league, team) {
-  if (!team.lines) return autoLines(league, team);
-  const avail = healthy(league, team);
-  const ok = new Set(avail.map((p) => p.id));
-  const used = new Set();
-  const all = [...team.lines.F.flat(), ...team.lines.D.flat(), ...team.lines.G];
-  for (const id of all) if (id && ok.has(id)) used.add(id);
-  const spare = (pred) => {
-    const p = avail.filter((x) => !used.has(x.id) && pred(x)).sort(byOvr)[0];
+const groupOf = (pos) => (isGoalie(pos) ? "G" : isDefense(pos) ? "D" : "F");
+const normName = (s) => String(s).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z]/g, "");
+const COLUMN = { LW: 0, C: 1, RW: 2, LD: 0, RD: 1 };
+const slotPred = (grp, j) => (grp === "G" ? (x) => isGoalie(x.pos) : grp === "D" ? (x) => isDefense(x.pos) : j === 1 ? (x) => x.pos === "C" : (x) => isForward(x.pos));
+const clone = (L) => ({ F: L.F.map((l) => [...l]), D: L.D.map((l) => [...l]), G: [...L.G], PP: (L.PP || [[], []]).map((u) => [...u]), PK: (L.PK || [[], []]).map((u) => [...u]) });
+
+// Best healthy player not yet used, matching the slot (C slot prefers centres).
+function spareFinder(league, team, used) {
+  const avail = healthy(league, team).sort(byOvr);
+  const take = (pred) => {
+    const p = avail.find((x) => !used.has(x.id) && pred(x));
     if (p) used.add(p.id);
     return p ? p.id : null;
   };
-  let broken = false;
-  const fix = (id, pred) => {
-    if (id && ok.has(id)) return id;
-    broken = true;
-    return spare(pred) || spare((x) => !isGoalie(x.pos));
+  return (grp, j) => take(slotPred(grp, j)) || (grp === "G" ? null : take(slotPred(grp, 0)) || take((x) => !isGoalie(x.pos)));
+}
+
+// Set lines from player names (the real NHL combinations in the roster file).
+// Unreported slots (null) are filled with the best healthy player left.
+export function linesFromNames(league, team, spec) {
+  const roster = rosterPlayers(league, team);
+  const used = new Set();
+  const find = (name, grp) => {
+    if (!name) return null;
+    const n = normName(name);
+    const hit = roster.find((p) => !used.has(p.id) && normName(p.name) === n && groupOf(p.pos) === grp) || roster.find((p) => !used.has(p.id) && normName(p.name) === n);
+    if (hit) used.add(hit.id);
+    return hit ? hit.id : null;
   };
-  const fixedF = team.lines.F.map((line) => line.map((id, j) => fix(id, (x) => (j === 1 ? x.pos === "C" : isForward(x.pos)))));
-  const fixedD = team.lines.D.map((pair) => pair.map((id) => fix(id, (x) => isDefense(x.pos))));
-  let G = team.lines.G.map((id) => (id && ok.has(id) ? id : null));
-  if (!G[0] || !G[1]) {
-    const gs = avail.filter((x) => isGoalie(x.pos) && !G.includes(x.id)).sort(byOvr);
-    if (!G[0]) G[0] = (gs.shift() || {}).id || null;
-    if (!G[1]) G[1] = (gs.shift() || {}).id || null;
-  }
-  team.lines.F = fixedF;
-  team.lines.D = fixedD;
-  team.lines.G = G;
-  const dressed = new Set([...fixedF.flat(), ...fixedD.flat()]);
-  const stOk = [...team.lines.PP.flat(), ...team.lines.PK.flat()].every((id) => dressed.has(id));
-  if (broken || !stOk) Object.assign(team.lines, specialTeams(dressedSkaters(league, fixedF, fixedD)));
+  const F = [0, 1, 2, 3].map((i) => [0, 1, 2].map((j) => find(spec.F?.[i]?.[j], "F")));
+  const D = [0, 1, 2].map((i) => [0, 1].map((j) => find(spec.D?.[i]?.[j], "D")));
+  const G = [0, 1].map((j) => find(spec.G?.[j], "G"));
+  team.lines = { F, D, G, PP: [[], []], PK: [[], []] };
+  team.linesNew = [];
+  syncLines(league, team);
+  team.nhlLines = clone(team.lines);
   return team.lines;
+}
+
+// Go back to the opening-night NHL combinations (players who have left are replaced).
+export function resetNhlLines(league, team) {
+  if (!team.nhlLines) return autoLines(league, team);
+  team.lines = clone(team.nhlLines);
+  team.lines.PP = [[], []];
+  team.lines.PK = [[], []];
+  return syncLines(league, team);
+}
+
+// After roster moves: replace players who have left the team, fill empty slots,
+// and work newly arrived or newly healthy players (team.linesNew) into the lineup.
+// Injured players keep their spot; gameLines() covers for them game by game.
+export function syncLines(league, team) {
+  if (!team.lines) {
+    team.linesNew = [];
+    return autoLines(league, team);
+  }
+  const L = team.lines;
+  const on = new Set(team.roster);
+  const used = new Set(lineupIds(L).filter((id) => on.has(id)));
+  const spare = spareFinder(league, team, used);
+  let changed = false;
+  const keep = (id, grp, j) => {
+    if (id && on.has(id)) return id;
+    const sub = spare(grp, j);
+    if (sub) changed = true;
+    return sub;
+  };
+  L.F = L.F.map((line) => line.map((id, j) => keep(id, "F", j)));
+  L.D = L.D.map((pair) => pair.map((id, j) => keep(id, "D", j)));
+  L.G = L.G.map((id) => keep(id, "G", 0));
+  if (!L.G[0] && L.G[1]) L.G = [L.G[1], null];
+
+  const queue = (team.linesNew || []).filter((id) => on.has(id));
+  team.linesNew = [];
+  for (const id of queue) {
+    const p = league.players[id];
+    if (!p || p.injury > 0 || lineupIds(L).includes(id)) continue;
+    if (slotIn(league, team, p)) {
+      changed = true;
+      if (team.id === league.userTid) league.inbox?.push({ year: league.year, day: league.day, text: `${p.name} slots into your lineup. Check the Lines tab.` });
+    }
+  }
+  if (!L.PP?.[0]?.length || !L.PK?.[0]?.length || (changed && team.id !== league.userTid)) Object.assign(L, specialTeams(dressedSkaters(league, L.F, L.D)));
+  else patchSpecialTeams(league, L);
+  return L;
+}
+
+// Keep custom PP/PK units, swapping out only players who are no longer dressed.
+export function patchSpecialTeams(league, L) {
+  const dressed = dressedSkaters(league, L.F, L.D).map((p) => ({ p, c: composites(p) }));
+  const score = { PP: (x) => x.c.off * 0.7 + x.p.ovr * 0.3, PK: (x) => x.c.def * 0.7 + x.p.ovr * 0.3 };
+  const ids = new Set(dressed.map((x) => x.p.id));
+  for (const k of ["PP", "PK"]) {
+    const units = L[k];
+    for (const unit of units) {
+      unit.forEach((id, j) => {
+        if (ids.has(id)) return;
+        const inUse = new Set(units.flat());
+        const wasD = isDefense(league.players[id]?.pos);
+        const pool = dressed.filter((x) => !inUse.has(x.p.id)).sort((a, b) => score[k](b) - score[k](a));
+        const pick = pool.find((x) => isDefense(x.p.pos) === wasD) || pool[0];
+        unit[j] = pick ? pick.p.id : null;
+      });
+    }
+    L[k] = units.map((u) => u.filter(Boolean));
+  }
+}
+
+// Put a player into the lineup if he beats the bottom of his column (4th-line C for a
+// centre, 3rd-pair RD for a right D...), then move him up past anyone he's better than.
+export function slotIn(league, team, p, { margin = 0 } = {}) {
+  const L = team.lines;
+  if (!L || !p) return false;
+  const on = new Set(team.roster);
+  const grp = groupOf(p.pos);
+  // A defenceman filling in at forward (or vice versa) is always the first to make way.
+  const val = (id) => (id && on.has(id) && league.players[id] && groupOf(league.players[id].pos) === grp ? league.players[id].ovr : -1);
+  if (isGoalie(p.pos)) {
+    if (p.ovr <= val(L.G[1]) + margin) return false;
+    L.G[1] = p.id;
+    if (p.ovr > val(L.G[0]) + 2) L.G = [L.G[1], L.G[0]];
+    return true;
+  }
+  const rows = isDefense(p.pos) ? L.D : L.F;
+  const col = COLUMN[p.pos] ?? 0;
+  const last = rows.length - 1;
+  if (p.ovr > val(rows[last][col]) + margin) {
+    rows[last][col] = p.id;
+    for (let i = last; i > 0 && p.ovr > val(rows[i - 1][col]); i--) {
+      [rows[i - 1][col], rows[i][col]] = [rows[i][col], rows[i - 1][col]];
+    }
+    return true;
+  }
+  let worst = null;
+  rows.forEach((r, i) => r.forEach((id, j) => {
+    const v = val(id);
+    if (!worst || v < worst.v) worst = { i, j, v };
+  }));
+  if (worst && p.ovr > worst.v + margin + 2) {
+    rows[worst.i][worst.j] = p.id;
+    return true;
+  }
+  return false;
+}
+
+// AI coaches look at their scratches about once a week and dress anyone clearly better.
+export function coachLines(league, team) {
+  const L = syncLines(league, team);
+  const inLineup = new Set(lineupIds(L));
+  const spares = healthy(league, team).filter((p) => !inLineup.has(p.id)).sort(byOvr);
+  let moved = 0;
+  for (const p of spares) {
+    if (moved >= 3) break;
+    if (slotIn(league, team, p, { margin: 4 })) moved++;
+  }
+  if (moved) Object.assign(L, specialTeams(dressedSkaters(league, L.F, L.D)));
+  return L;
+}
+
+// The lineup actually dressed for a game: injured or departed players are covered by the
+// best healthy scratch, without changing the saved lines.
+export function gameLines(league, team) {
+  const L = team.lines || syncLines(league, team);
+  const on = new Set(team.roster);
+  const ok = (id) => id && on.has(id) && league.players[id] && league.players[id].injury <= 0;
+  const used = new Set(lineupIds(L).filter(ok));
+  const spare = spareFinder(league, team, used);
+  let subbed = false;
+  const fix = (id, grp, j) => {
+    if (ok(id)) return id;
+    subbed = true;
+    return spare(grp, j);
+  };
+  const F = L.F.map((line) => line.map((id, j) => fix(id, "F", j)));
+  const D = L.D.map((pair) => pair.map((id, j) => fix(id, "D", j)));
+  let G = L.G.map((id) => (ok(id) ? id : spare("G", 0)));
+  if (!G[0] && G[1]) G = [G[1], null];
+  const dressed = new Set([...F.flat(), ...D.flat()].filter(Boolean));
+  const st = [...(L.PP || []).flat(), ...(L.PK || []).flat()];
+  const stOk = L.PP?.[0]?.length && L.PK?.[0]?.length && st.every((id) => dressed.has(id));
+  const special = subbed || !stOk ? specialTeams(dressedSkaters(league, F, D)) : { PP: L.PP, PK: L.PK };
+  return { F, D, G, ...special };
 }
 
 export function lineupIds(lines) {
@@ -110,7 +259,7 @@ export function lineupIds(lines) {
 
 // Team strength snapshot used by standings previews, trade AI and the hub.
 export function teamRatings(league, team) {
-  const lines = team.lines || autoLines(league, team);
+  const lines = gameLines(league, team);
   const get = (id) => league.players[id];
   const lineAvg = (ids) => {
     const ps = ids.map(get).filter(Boolean);

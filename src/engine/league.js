@@ -6,13 +6,13 @@ import { TEAMS } from "./teams.js";
 import { seed as seedRng, randInt, pick, chance, gauss, clamp } from "./rng.js";
 import { createPlayer, generatePlayer, marketValue } from "./players.js";
 import { FIRST_SEASON, SCOUT_POINTS_PER_SEASON, SAVE_KEY, SAVE_VERSION, MAX_ROSTER, isGoalie, isDefense, minSalaryForYear } from "./constants.js";
-import { autoLines } from "./lines.js";
+import { autoLines, linesFromNames, lineupIds, coachLines } from "./lines.js";
 import { generateSchedule, lastDay } from "./schedule.js";
 import { createGame, simToEnd, applyResult, blankRecord } from "./sim.js";
 import { generateDraftClass, createDraftPicks, startDraft, finishDraft, draftDone } from "./draft.js";
 import { startPlayoffs, simPlayoffDay } from "./playoffs.js";
 import { computeAwards, connSmythe } from "./awards.js";
-import { ensureMinimums, counts, sendDown, canSendDown, logTx } from "./roster.js";
+import { ensureMinimums, counts, sendDown, canSendDown, logTx, IR_GAMES } from "./roster.js";
 import { startResign, endResign, startNewSeason, aiManageRoster, ratingLevel } from "./offseason.js";
 
 export function createLeague({ userAbbr = "TOR", mode = "real", difficulty = "normal", seed } = {}) {
@@ -59,10 +59,12 @@ export function createLeague({ userAbbr = "TOR", mode = "real", difficulty = "no
   else generateRandomRosters(league);
 
   for (const t of league.teams) {
+    const real = mode === "real" ? rosterFile.lines?.[t.abbr] : null;
     addMinorLeaguers(league, t);
-    trimToLimit(league, t);
     ensureMinimums(league, t);
-    autoLines(league, t);
+    trimToLimit(league, t, real ? namedPlayers(league, t, real) : new Set());
+    if (real) linesFromNames(league, t, real);
+    else autoLines(league, t);
   }
   seedFreeAgents(league);
   league.ratingAnchor = ratingLevel(league);
@@ -70,7 +72,7 @@ export function createLeague({ userAbbr = "TOR", mode = "real", difficulty = "no
   generateDraftClass(league, year + 1);
   league.schedule = generateSchedule(league.teams);
   league.deadlineDay = Math.floor(lastDay(league.schedule) * 0.78);
-  league.inbox.push({ year, day: 0, text: `Welcome, GM of the ${user.city} ${user.name}! Rosters and ratings are from EA SPORTS NHL 27. Set your lines, then start the season.` });
+  league.inbox.push({ year, day: 0, text: `Welcome, GM of the ${user.city} ${user.name}! Rosters and ratings are from EA SPORTS NHL 27, and every team starts with its real opening-week line combinations. Check the Lines tab, then start the season.` });
   return league;
 }
 
@@ -84,7 +86,20 @@ function loadRealRosters(league) {
       league.players[p.id] = p;
       t.roster.push(p.id);
     }
+    // Players reported injured (or otherwise unavailable) at the start of the season.
+    for (const o of rosterFile.lines?.[t.abbr]?.out || []) {
+      const p = t.roster.map((id) => league.players[id]).find((x) => x.name === o.name);
+      if (!p) continue;
+      p.injury = o.games;
+      p.injuryNote = o.note;
+    }
   }
+}
+
+// Everyone named in a team's real lines or injury list (protected from roster trimming).
+function namedPlayers(league, t, real) {
+  const names = new Set([...real.F.flat(), ...real.D.flat(), ...real.G, ...(real.out || []).map((o) => o.name)].filter(Boolean));
+  return new Set(t.roster.filter((id) => names.has(league.players[id].name)));
 }
 
 function generateRandomRosters(league) {
@@ -120,12 +135,15 @@ function addMinorLeaguers(league, t) {
   }
 }
 
-function trimToLimit(league, t) {
+// Send the lowest-rated extras to the minors until the roster fits. Players in the
+// real opening-night lineup are kept; so is a third goalie if he's not the weakest.
+function trimToLimit(league, t, keep = new Set()) {
   let guard = 0;
-  while (counts(league, t).active > MAX_ROSTER && guard++ < 6) {
-    const ps = t.roster.map((id) => league.players[id]).sort((a, b) => a.ovr - b.ovr);
+  while (counts(league, t).active > MAX_ROSTER && guard++ < 12) {
+    const ps = t.roster.map((id) => league.players[id]).filter((p) => p.injury < IR_GAMES).sort((a, b) => a.ovr - b.ovr);
     const g = ps.filter((p) => isGoalie(p.pos));
-    const victim = g.length > 2 ? g[0] : ps.find((p) => !isGoalie(p.pos));
+    const extras = ps.filter((p) => !keep.has(p.id) && (!isGoalie(p.pos) || g.length > 2));
+    const victim = extras[0] || (g.length > 2 ? g[0] : ps.find((p) => !isGoalie(p.pos)));
     if (canSendDown(victim)) sendDown(league, t, victim.id);
     else {
       t.roster = t.roster.filter((x) => x !== victim.id);
@@ -168,7 +186,12 @@ export function startRegularSeason(league) {
 function healDay(league, playedTids) {
   for (const id in league.players) {
     const p = league.players[id];
-    if (p.injury > 0 && playedTids.has(p.tid)) p.injury--;
+    if (p.injury > 0 && playedTids.has(p.tid)) {
+      p.injury--;
+      // Back from injury: if he'd lost his spot, he's considered for the lineup again.
+      const t = p.injury === 0 && league.teams[p.tid];
+      if (t && t.lines && !lineupIds(t.lines).includes(p.id)) (t.linesNew ||= []).push(p.id);
+    }
   }
 }
 
@@ -205,7 +228,13 @@ export function finishDay(league, played) {
   const ids = played || new Set(gamesOnDay(league, league.day).flatMap((g) => [g.h, g.a]));
   healDay(league, ids);
   // AI rosters adjust to injuries periodically.
-  if (league.day % 7 === 0) for (const t of league.teams) if (t.id !== league.userTid) aiManageRoster(league, t, { inSeason: true });
+  if (league.day % 7 === 0) {
+    for (const t of league.teams) {
+      if (t.id === league.userTid) continue;
+      aiManageRoster(league, t, { inSeason: true });
+      if (league.day >= 7) coachLines(league, t);
+    }
+  }
   league.day++;
   while (league.day <= lastDay(league.schedule) && !gamesOnDay(league, league.day).length) league.day++;
 }

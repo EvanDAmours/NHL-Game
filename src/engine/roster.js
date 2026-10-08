@@ -2,7 +2,7 @@
 import { capForYear, MAX_ROSTER, MIN_FORWARDS, MIN_DEFENSE, MIN_GOALIES, isForward, isDefense, isGoalie, ELC_SALARY, minSalaryForYear } from "./constants.js";
 import { generatePlayer, marketValue, round2 } from "./players.js";
 import { randInt, pick } from "./rng.js";
-import { autoLines } from "./lines.js";
+import { syncLines } from "./lines.js";
 
 export const IR_GAMES = 7; // players out this long don't count against the 23-man limit
 
@@ -57,7 +57,13 @@ export function addToRoster(league, team, p) {
   p.tid = team.id;
   team.prospects = team.prospects.filter((x) => x !== p.id);
   if (!team.roster.includes(p.id)) team.roster.push(p.id);
-  team.lines = null;
+  queueForLines(league, team, [p.id]);
+}
+
+// New arrivals are worked into the lineup if they're better than who's there.
+export function queueForLines(league, team, ids) {
+  team.linesNew = [...(team.linesNew || []), ...ids];
+  syncLines(league, team);
 }
 
 export function signPlayer(league, team, p, aav, yrs) {
@@ -84,7 +90,7 @@ export function releasePlayer(league, team, pid) {
   p.yrs = 0;
   p.cap = 0;
   if (!league.freeAgents.includes(pid)) league.freeAgents.push(pid);
-  team.lines = null;
+  syncLines(league, team);
   logTx(league, `${team.abbr} release ${p.name}`, [team.id]);
 }
 
@@ -98,7 +104,7 @@ export function sendDown(league, team, pid) {
   if (!p || !canSendDown(p)) return false;
   team.roster = team.roster.filter((x) => x !== pid);
   if (!team.prospects.includes(pid)) team.prospects.push(pid);
-  team.lines = null;
+  syncLines(league, team);
   return true;
 }
 
@@ -155,7 +161,7 @@ export function ensureMinimums(league, team, { notify = false } = {}) {
     addToRoster(league, team, p);
     logTx(league, `${team.abbr} call up ${p.name} (${p.pos}) from the AHL`, [team.id]);
   }
-  if (!team.lines) autoLines(league, team);
+  syncLines(league, team);
 }
 
 export function topPlayers(league, team, n = 3) {

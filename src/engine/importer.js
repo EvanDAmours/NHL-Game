@@ -4,6 +4,7 @@ import { rescaleToOvr } from "./ratings.js";
 import { createPlayer } from "./players.js";
 import { POSITIONS, ARCHETYPES } from "./constants.js";
 import { addToRoster, logTx } from "./roster.js";
+import { syncLines } from "./lines.js";
 
 export function normName(s) {
   return String(s || "")
@@ -107,7 +108,7 @@ export function applyRatings(league, matches, { markEA = true, moveTeams = false
           if (old) {
             old.roster = old.roster.filter((x) => x !== player.id);
             old.prospects = old.prospects.filter((x) => x !== player.id);
-            old.lines = null;
+            syncLines(league, old);
           }
           league.freeAgents = league.freeAgents.filter((x) => x !== player.id);
           addToRoster(league, t, player);
@@ -125,7 +126,7 @@ export function applyRatings(league, matches, { markEA = true, moveTeams = false
       report.added++;
     } else report.skipped++;
   }
-  for (const t of league.teams) t.lines = null;
+  for (const t of league.teams) syncLines(league, t);
   logTx(league, `Ratings import: ${report.updated} updated, ${report.moved} moved, ${report.added} added`);
   return report;
 }

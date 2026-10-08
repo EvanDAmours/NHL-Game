@@ -3,7 +3,7 @@
 // so live games feed season stats exactly like simulated ones.
 import { rand, chance, weighted, randInt, randFloat, pick, clamp } from "./rng.js";
 import { composites } from "./ratings.js";
-import { autoLines, repairLines } from "./lines.js";
+import { syncLines, gameLines } from "./lines.js";
 import { isForward, isDefense, isGoalie } from "./constants.js";
 import { blankStats, chanceInjury, injuryLength } from "./players.js";
 
@@ -51,7 +51,8 @@ export function createGame(league, home, away, opts = {}) {
 
 function makeSide(league, team, opts) {
   const userTeam = team.id === opts.userTid;
-  const lines = userTeam ? repairLines(league, team) : autoLines(league, team);
+  syncLines(league, team);
+  const lines = gameLines(league, team);
   const dressed = [...new Set([...lines.F.flat(), ...lines.D.flat(), ...lines.G].filter(Boolean))];
   const comp = {};
   const pl = {};

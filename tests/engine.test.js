@@ -7,7 +7,8 @@ import { generateAttributes, computeOvr } from "../src/engine/ratings.js";
 import { simPlayoffDay } from "../src/engine/playoffs.js";
 import { simDraftToUser, draftDone } from "../src/engine/draft.js";
 import { simFADay, expiringPlayers } from "../src/engine/offseason.js";
-import { counts } from "../src/engine/roster.js";
+import { counts, capSpace } from "../src/engine/roster.js";
+import { gameLines, syncLines, lineupIds } from "../src/engine/lines.js";
 import { evaluateTrade, executeTrade } from "../src/engine/trade.js";
 import { parseRatingsCsv, matchRows, applyRatings } from "../src/engine/importer.js";
 import { MAX_ROSTER } from "../src/engine/constants.js";
@@ -152,4 +153,54 @@ test("save round-trips through compression", () => {
   const back = L.deserializeLeague(L.serializeLeague(lg));
   assert.equal(back.teams.length, 32);
   assert.equal(Object.keys(back.players).length, Object.keys(lg.players).length);
+});
+
+test("real NHL line combinations are set at league creation", () => {
+  const lg = L.createLeague({ userAbbr: "TOR", seed: 5 });
+  for (const t of lg.teams) {
+    const real = rosterFile.lines[t.abbr];
+    assert.ok(real, `${t.abbr} has real lines`);
+    const name = (id) => lg.players[id]?.name ?? null;
+    real.F.forEach((line, i) => line.forEach((n, j) => n && assert.equal(name(t.lines.F[i][j]), n, `${t.abbr} F${i + 1}`)));
+    real.D.forEach((pair, i) => pair.forEach((n, j) => n && assert.equal(name(t.lines.D[i][j]), n, `${t.abbr} D${i + 1}`)));
+    real.G.forEach((n, j) => n && assert.equal(name(t.lines.G[j]), n, `${t.abbr} G${j + 1}`));
+    const ids = lineupIds(t.lines);
+    assert.equal(ids.length, 20, `${t.abbr} dresses 20`);
+    assert.equal(new Set(ids).size, 20, `${t.abbr} no duplicates`);
+    for (const o of real.out) assert.ok(t.roster.map((id) => lg.players[id]).find((p) => p.name === o.name)?.injury > 0, `${o.name} starts injured`);
+    assert.ok(counts(lg, t).active <= MAX_ROSTER, `${t.abbr} roster size`);
+    assert.ok(capSpace(lg, t) >= 0, `${t.abbr} under the cap`);
+  }
+});
+
+test("lines survive injuries and roster moves; returning players get their spot back", () => {
+  const lg = L.createLeague({ userAbbr: "DET", seed: 6 });
+  const det = lg.teams[lg.userTid];
+  const before = JSON.stringify(det.lines);
+  const top = det.lines.F[0][1];
+  lg.players[top].injury = 3;
+  const g = gameLines(lg, det);
+  assert.notEqual(g.F[0][1], top, "injured centre sits");
+  assert.ok(!lineupIds(g).some((id) => lg.players[id].injury > 0), "no injured player dressed");
+  assert.equal(JSON.stringify(det.lines), before, "saved lines unchanged");
+  lg.players[top].injury = 0;
+
+  // Larkin starts the season hurt; when healthy he goes straight to the top line.
+  const larkin = det.roster.map((id) => lg.players[id]).find((p) => p.name === "Dylan Larkin");
+  assert.ok(larkin.injury > 0 && !lineupIds(det.lines).includes(larkin.id));
+  larkin.injury = 0;
+  det.linesNew = [larkin.id];
+  syncLines(lg, det);
+  assert.ok(det.lines.F.slice(0, 2).some((line) => line.includes(larkin.id)), "Larkin back in the top six");
+  assert.equal(new Set(lineupIds(det.lines)).size, 20);
+
+  // Trading away a lined player keeps the other combinations intact.
+  const tor = lg.teams.find((t) => t.abbr === "TOR");
+  const torBefore = tor.lines.F.map((l) => [...l]);
+  const gone = tor.lines.F[2][0];
+  tor.roster = tor.roster.filter((id) => id !== gone);
+  syncLines(lg, tor);
+  assert.deepEqual(tor.lines.F[0], torBefore[0]);
+  assert.deepEqual(tor.lines.F[1], torBefore[1]);
+  assert.ok(tor.lines.F[2][0] && tor.lines.F[2][0] !== gone);
 });

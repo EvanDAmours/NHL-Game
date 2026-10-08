@@ -2,7 +2,7 @@
 // and picks differently depending on whether they're contending or rebuilding.
 import { tradeValue, prospectValue } from "./players.js";
 import { DIFFICULTY, MAX_ROSTER, isGoalie, isDefense, capForYear } from "./constants.js";
-import { capSpace, counts, logTx } from "./roster.js";
+import { capSpace, counts, logTx, queueForLines } from "./roster.js";
 import { leagueTable } from "./standings.js";
 import { teamRatings } from "./lines.js";
 import { pickLabel } from "./draft.js";
@@ -112,8 +112,8 @@ export function executeTrade(league, offer) {
   };
   offer.givePicks.forEach((pid) => movePick(pid, ai.id));
   offer.getPicks.forEach((pid) => movePick(pid, user.id));
-  user.lines = null;
-  ai.lines = null;
+  queueForLines(league, user, offer.get);
+  queueForLines(league, ai, offer.give);
   const names = (ids) => ids.map((id) => league.players[id].name);
   const picks = (ids) => ids.map((pid) => pickLabel(league, league.draftPicks.find((p) => p.id === pid)));
   const userSends = [...names(offer.give), ...picks(offer.givePicks)].join(", ") || "nothing";

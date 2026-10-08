@@ -32,6 +32,32 @@ for (const [abbr, players] of Object.entries(data.teams)) {
   }
   console.log(`${abbr}  ${String(players.length).padStart(2)} players  ${f}F ${d}D ${g}G  cap $${cap.toFixed(1)}M`);
 }
+// Real line combinations: every named player must be on that team, once.
+const GROUP = { F: ["C", "LW", "RW"], D: ["LD", "RD"], G: ["G"] };
+for (const [abbr, l] of Object.entries(data.lines || {})) {
+  const team = data.teams[abbr];
+  if (!team) { problems.push(`lines for unknown team ${abbr}`); continue; }
+  const shape = [["F", 4, 3], ["D", 3, 2]];
+  for (const [k, rows, cols] of shape) {
+    if (l[k]?.length !== rows || l[k].some((r) => r.length !== cols)) problems.push(`${abbr} lines: ${k} must be ${rows}x${cols}`);
+  }
+  if (l.G?.length !== 2) problems.push(`${abbr} lines: G must list 2 goalies`);
+  const named = [];
+  for (const k of ["F", "D", "G"]) for (const name of (l[k] || []).flat()) if (name) named.push([name, k]);
+  for (const o of l.out || []) {
+    named.push([o.name, null]);
+    if (!(o.games > 0 && o.games < 83)) problems.push(`${abbr} out: ${o.name} games must be 1-82`);
+  }
+  const seenHere = new Set();
+  for (const [name, k] of named) {
+    const p = team.find((x) => x.name === name);
+    if (!p) problems.push(`${abbr} lines: ${name} is not on the ${abbr} roster`);
+    else if (k && !GROUP[k].includes(p.pos)) problems.push(`${abbr} lines: ${name} (${p.pos}) is listed in ${k}`);
+    if (seenHere.has(name)) problems.push(`${abbr} lines: ${name} appears twice`);
+    seenHere.add(name);
+  }
+}
+
 console.log(`\n${Object.keys(data.teams).length} teams, ${total} players, ${ea} with official EA NHL 27 overalls, ${total - ea} estimated.`);
 if (problems.length) {
   console.error(`\n${problems.length} problem(s):\n- ` + problems.join("\n- "));

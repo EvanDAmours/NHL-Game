@@ -4,7 +4,7 @@ import { clamp, chance, shuffle, randInt, gauss } from "./rng.js";
 import { contractAsk, developPlayer, retirementChance, blankStats, marketValue, generatePlayer, isRFA, round2 } from "./players.js";
 import { capForYear, minSalaryForYear, maxSalaryForYear, DIFFICULTY, FA_DAYS, SCOUT_POINTS_PER_SEASON, isGoalie, isDefense, isForward, MAX_ROSTER } from "./constants.js";
 import { payroll, capSpace, counts, signPlayer, releasePlayer, callUp, sendDown, canSendDown, logTx, ensureMinimums, hasRoomFor } from "./roster.js";
-import { teamRatings, autoLines } from "./lines.js";
+import { teamRatings, autoLines, syncLines } from "./lines.js";
 import { generateSchedule } from "./schedule.js";
 import { generateDraftClass, createDraftPicks, releaseProspect } from "./draft.js";
 import { blankRecord } from "./sim.js";
@@ -79,7 +79,7 @@ export function letWalk(league, pid) {
   if (!team) return;
   team.roster = team.roster.filter((x) => x !== pid);
   team.prospects = team.prospects.filter((x) => x !== pid);
-  team.lines = null;
+  syncLines(league, team);
   p.tid = -1;
   p.yrs = 0;
   p.cap = 0;
@@ -264,8 +264,10 @@ export function startNewSeason(league) {
       }
     }
     if (t.id !== league.userTid) aiManageRoster(league, t);
-    t.lines = null;
-    autoLines(league, t);
+    // AI coaches start fresh each fall; the user's combinations carry over.
+    t.nhlLines = null;
+    if (t.id === league.userTid) syncLines(league, t);
+    else autoLines(league, t);
   }
   league.schedule = generateSchedule(league.teams);
   league.day = 0;
